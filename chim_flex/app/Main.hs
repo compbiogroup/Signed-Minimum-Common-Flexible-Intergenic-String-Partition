@@ -16,7 +16,7 @@ import Data.ByteString.Builder (intDec, toLazyByteString)
 import Data.ByteString.Char8 qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Time (diffUTCTime, getCurrentTime)
-import Genomes (RigidFlexibleMatcher (..), readFGenome, readRGenome)
+import Genomes (RigidFlexibleReverseMatcher (..), Sign (..), readFGenome, readRGenome)
 import LocalBase
 import Options.Applicative
 import Partition (getBlocksMatchGraph, getPartition, writePartition)
@@ -25,7 +25,8 @@ import Text.Printf (printf)
 data Args = Args
   { input :: String,
     output :: String,
-    noParallel :: Bool
+    noParallel :: Bool,
+    signed :: Sign
   }
 
 argsParser :: Parser Args
@@ -46,6 +47,13 @@ argsParser =
     <*> switch
       ( long "no-par"
           <> help "Do not process the genomes in parallel."
+      )
+    <*> flag
+      Unsigned
+      Signed
+      ( long "signed"
+          <> short 's'
+          <> help "Whether the input Strings are signed."
       )
 
 opts :: ParserInfo Args
@@ -70,7 +78,7 @@ main = do
   where
     runOne args (i, bstrs) = do
       start <- getCurrentTime
-      let !bstrs' = force $ produceBlockMatch bstrs
+      let !bstrs' = force $ produceBlockMatch (signed args) bstrs
       end <- getCurrentTime
       let time = BS.pack . (show :: Double -> String) . realToFrac $ diffUTCTime end start
       BS.writeFile (output args ++ "_" ++ printf "%04d" i) . BS.unlines $ fromAns (bstrs', "# Time: " <> (BS.pack . show $ time))
@@ -81,14 +89,14 @@ main = do
 
     fromAns ((s1, i1, s2, i2, bmg), time) = s1 : i1 : s2 : i2 : bmg : [time]
 
-produceBlockMatch :: (BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString) -> (BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString)
-produceBlockMatch (s1, i1, s2, i2) = (s1', i1', s2', i2', bmg)
+produceBlockMatch :: Sign -> (BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString) -> (BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString)
+produceBlockMatch sign (s1, i1, s2, i2) = (s1', i1', s2', i2', bmg)
   where
     (s1', i1', s2', i2') = writePartition part
     part = getPartition g h
-    bmg = writeBlocksMatchGraph $ getBlocksMatchGraph RFM part
-    g = readRGenome True s1 i1
-    h = readFGenome True s2 i2
+    bmg = writeBlocksMatchGraph $ getBlocksMatchGraph RFRM part
+    g = readRGenome True sign s1 i1
+    h = readFGenome True sign s2 i2
 
 writeBlocksMatchGraph :: [[Int]] -> BS.ByteString
 writeBlocksMatchGraph = BS.unwords . (\l -> interleavelists l (replicate (length l - 1) "|")) . map (BS.unwords . map (LBS.toStrict . toLazyByteString . intDec))

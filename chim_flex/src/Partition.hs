@@ -19,7 +19,7 @@ import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
 import Data.List qualified as List
 import Data.Maybe (fromMaybe, mapMaybe)
-import Genomes (GenesIRsF, GenesIRsR, Genome (..), Idx, IntergenicGenome (..), Matcher (..), RigidFlexibleMatcher (..), decIdx, idxDist, idxToInt, incIdx, mkIdx, writeFGenome, writeIR, writeRGenome)
+import Genomes (GenesIRsF, GenesIRsR, Genome (..), Idx, IntergenicGenome (..), Matcher (..), RigidFlexibleReverseMatcher (..), decIdx, idxDist, idxToInt, incIdx, mkIdx, writeFGenome, writeIR, writeRGenome)
 import LocalBase
 
 type Breakpoint = [Idx]
@@ -36,7 +36,7 @@ instance Show (Partition GenesIRsR GenesIRsF) where
       getSub write g' i succi = write $ subGenome (incIdx i) succi g'
 
 getPartition :: GenesIRsR -> GenesIRsF -> Partition GenesIRsR GenesIRsF
-getPartition = greedyPart RFM
+getPartition = greedyPart RFRM
 
 writePartition :: Partition GenesIRsR GenesIRsF -> (BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString)
 writePartition (GenomePartition g h bg bh) = (genes_bs_g, irs_bs_g, genes_bs_h, irs_bs_h)
@@ -52,7 +52,7 @@ writePartition (GenomePartition g h bg bh) = (genes_bs_g, irs_bs_g, genes_bs_h, 
     bssh = zipWith (getSub (writeFGenome False) h) bh $ tail bh
     getSub write g' i succi = write $ subGenome (incIdx i) succi g'
 
-getBlocksMatchGraph :: RigidFlexibleMatcher GenesIRsR GenesIRsF -> Partition GenesIRsR GenesIRsF -> [[Int]]
+getBlocksMatchGraph :: RigidFlexibleReverseMatcher GenesIRsR GenesIRsF -> Partition GenesIRsR GenesIRsF -> [[Int]]
 getBlocksMatchGraph macher (GenomePartition g h bg bh) =
   do
     sub_g <- zipWith (getSub g) bg $ tail bg

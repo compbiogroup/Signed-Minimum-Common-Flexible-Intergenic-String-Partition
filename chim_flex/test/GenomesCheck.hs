@@ -17,18 +17,18 @@ genIR = Gen.int (Range.linear 0 100)
 
 -- | Generate an empty genome
 genRGenome :: Gen GenesIRsR
-genRGenome = genRGenomeWithSign True
+genRGenome = genRGenomeWithSign Signed
 
-genRGenomeWithSign :: Bool -> Gen GenesIRsR
-genRGenomeWithSign signed = do
+genRGenomeWithSign :: Sign -> Gen GenesIRsR
+genRGenomeWithSign sign = do
   n <- Gen.int (Range.linear 1 100)
   coins <- Gen.list (Range.singleton n) Gen.bool
   genes <- (if signed
           then zipWith swaps coins
           else id)
-      <$> Gen.list (Range.singleton n) genGene
+      <$> Gen.list (Range.singleton n - 2) genGene
   irs <- Gen.list (Range.singleton $ n - 1) genIR
-  return $ mkRGenome genes irs
+  return $ mkRGenome True sign genes irs
   where
     swaps b v = if b then v else -v
     

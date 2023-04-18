@@ -8,8 +8,6 @@ import qualified Data.List as List
 import Data.Hashable (Hashable)
 import Debug.Trace (trace)
 
-newtype Size = Size Int deriving newtype (Eq, Show, Read, Num, Integral, Real, Ord, Enum)
-
 newtype Dist = Dist Int deriving newtype (Eq, Show, Read)
 
 data Ori = LR | RL deriving (Eq, Show)
