@@ -1,20 +1,25 @@
 {-# LANGUAGE ExplicitForAll #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Partition
   ( greedyPart,
     getPartition,
+    writePartition,
+    getBlocksMatchGraph,
     longestSubstring,
   )
 where
 
+import Data.ByteString.Char8 qualified as BS
 import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
 import Data.List qualified as List
 import Data.Maybe (fromMaybe, mapMaybe)
-import Genomes (GenesIRsF, GenesIRsR, Genome (..), Idx, Matcher (..), RigidFlexibleMatcher (..), decIdx, idxDist, idxToInt, incIdx, mkIdx)
+import Genomes (GenesIRsF, GenesIRsR, Genome (..), Idx, IntergenicGenome (..), Matcher (..), RigidFlexibleMatcher (..), decIdx, idxDist, idxToInt, incIdx, mkIdx, writeFGenome, writeIR, writeRGenome)
 import LocalBase
 
 type Breakpoint = [Idx]
@@ -22,94 +27,55 @@ type Breakpoint = [Idx]
 data Partition g1 g2 where
   GenomePartition :: (Genome g1, Genome g2) => g1 -> g2 -> Breakpoint -> Breakpoint -> Partition g1 g2
 
+instance Show (Partition GenesIRsR GenesIRsF) where
+  show (GenomePartition g h bg bh) = unlines [combiStr subs_g, combiStr subs_h]
+    where
+      combiStr strs = unwords $ interleavelists strs (replicate (length strs - 1) "|")
+      subs_g = zipWith (getSub show g) bg $ tail bg
+      subs_h = zipWith (getSub show h) bh $ tail bh
+      getSub write g' i succi = write $ subGenome (incIdx i) succi g'
+
 getPartition :: GenesIRsR -> GenesIRsF -> Partition GenesIRsR GenesIRsF
 getPartition = greedyPart RFM
 
-reduced :: Partition GenesIRsR GenesIRsF -> (GenesIRsR, GenesIRsF)
-reduced (Partition g h bg bh) = undefined
-
--- | Converts a partition into a pair of genomes representing a mapping into
--- a permutation compatible with the reduced genomes correspondent to the partition
-mapToPerm :: Partition GenesIRsR GenesIRsF -> (GenesIRsR, GenesIRsF)
-mapToPerm (Partition g h bg bh) = gr hr
+writePartition :: Partition GenesIRsR GenesIRsF -> (BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString)
+writePartition (GenomePartition g h bg bh) = (genes_bs_g, irs_bs_g, genes_bs_h, irs_bs_h)
   where
-    (_, _, g_bal_ir) = toLists False g_bal
-    (_, _, h_bal_ir) = toLists False h_bal
-    gr = fromLists False sign gr_ls g_bal_ir
-    hr = fromLists False sign hr_ls h_bal_ir
-    (gr_ls, hr_ls) = (genomesToUniqueList ggs, genomesToUniqueList hhs)
-    ggs = gseq part
-    hhs = hseq part
-    (sign, gmEmptyX) = case partType part of
-      MCISP -> (Unsigned, gmEmpty)
-      RMCISP -> (Signed, gmEmptyRev)
+    genes_bs_g = combiBS $ map fst bssg
+    irs_bs_g = combiBS $ interleavelists (map snd bssg) ir_breaks_g
+    genes_bs_h = combiBS $ map fst bssh
+    irs_bs_h = combiBS $ interleavelists (map snd bssh) ir_breaks_h
+    combiBS bss = BS.unwords $ interleavelists bss (replicate (length bss - 1) "|")
+    ir_breaks_g = map (writeIR . (`getIR` g)) (init . tail $ bg)
+    ir_breaks_h = map (writeIR . (`getIR` h)) (init . tail $ bh)
+    bssg = zipWith (getSub (writeRGenome False) g) bg $ tail bg
+    bssh = zipWith (getSub (writeFGenome False) h) bh $ tail bh
+    getSub write g' i succi = write $ subGenome (incIdx i) succi g'
 
-    -- Produce list of unique characters correspondent to genes
-    genomesToUniqueList :: Seq Genome -> [Gene]
-    genomesToUniqueList = genomesToUniqueList' [] m_orig . toList
-    genomesToUniqueList' :: [Gene] -> GenomeMap GeneListForMap -> [Genome] -> [Gene]
-    genomesToUniqueList' acc m [] = reverse acc
-    genomesToUniqueList' acc m (g : gs) = genomesToUniqueList' ([v .. v + n - 1] ++ acc) m' gs
-      where
-        (_, lg, _) = toLists False g
-        n = intToGene . coerce . genomeSize $ g
-        v = head . unGeneListForMap . fromMaybe (error "Error on mapToPerm (1).") $ gmLookup g m
-        m' =
-          gmAlter
-            g
-            ( \old -> case old of
-                Nothing -> error "Error on mapToPerm (2)."
-                Just (MkGeneListForMap (x : xs)) -> MkGeneListForMap xs
-            )
-            m
-    m_orig = fst $ foldl addGenome (gmEmptyX, 1 :: Gene) (hhs Seq.>< ggs)
-    addGenome :: (GenomeMap GeneListForMap, Gene) -> Genome -> (GenomeMap GeneListForMap, Gene)
-    addGenome (m, count) g = (m', count')
-      where
-        n = intToGene . coerce . genomeSize $ g
-        count' = count + n
-        m' =
-          gmAlter
-            g
-            ( \old -> case old of
-                Nothing -> MkGeneListForMap [count]
-                Just (MkGeneListForMap l) -> MkGeneListForMap (count : l)
-            )
-            m
-
--- | Converts a partition into a pair of genomes representing the reduced genomes
--- correspondent to the partition
-reduced :: Partition -> (Genome, Genome)
-reduced (ValidPartition part) = (gr, hr)
+getBlocksMatchGraph :: RigidFlexibleMatcher GenesIRsR GenesIRsF -> Partition GenesIRsR GenesIRsF -> [[Int]]
+getBlocksMatchGraph macher (GenomePartition g h bg bh) =
+  do
+    sub_g <- zipWith (getSub g) bg $ tail bg
+    let sub_hs = zipWith (getSub h) bh $ tail bh
+    return . map fst . filter (isMatch macher sub_g . snd) . zip [0 ..] $ sub_hs
   where
-    gr = fromLists False sign gr_ls (toList $ gbps part)
-    hr = fromLists False sign hr_ls (toList $ hbps part)
-    (gr_ls, hr_ls) = (genomesToGenes ggs, genomesToGenes hhs)
-    ggs = gseq part
-    hhs = hseq part
-    (sign, gmEmptyX) = case partType part of
-      MCISP -> (Unsigned, gmEmpty)
-      RMCISP -> (Signed, gmEmptyRev)
-
-    genomesToGenes = map genomeToGene . toList
-    genomeToGene g = fromMaybe (error "Error on reduced.") $ gmLookup g m
-    m = fst $ foldl addGenome (gmEmptyX, 1 :: Gene) (hhs Seq.>< ggs)
-    addGenome (m, count) g = (m', count')
-      where
-        count' = if keepOld then count else count + 1
-        (m', _, keepOld) = gmLookupInsert g count m
+    getSub g' i succi = subGenome (incIdx i) succi g'
 
 -- TODO: add withSin, see original code
+
+-- | Greedy algorithm for string partition with intergenic regions or
+-- flexible intergeic regions
 greedyPart :: (Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> g1 -> g2 -> Partition g1 g2
-greedyPart matcher g h = GenomePartition g h (List.sort final_breaksG) (List.sort final_breaksH)
+greedyPart matcher g h = GenomePartition g h (cleanList final_breaksG) (cleanList final_breaksH)
   where
+    cleanList = map head . List.group . List.sort
     (final_breaksG, final_breaksH) = getAllLS IntSet.empty IntSet.empty [] []
     getAllLS genesOnBlocksG genesOnBlocksH breaksG breaksH =
       case longestSubstring matcher genesOnBlocksG genesOnBlocksH g h of
         Nothing -> (breaksG, breaksH)
         Just (((g_beg, g_end), (h_beg, h_end)), genesOnBlocksG', genesOnBlocksH') ->
           let breaksG' = (decIdx g_beg : g_end : breaksG)
-              breaksH' = (decIdx h_beg : h_end : breaksG)
+              breaksH' = (decIdx h_beg : h_end : breaksH)
            in getAllLS genesOnBlocksG' genesOnBlocksH' breaksG' breaksH'
 
 longestSubstring :: forall m g1 g2. (Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> IntSet -> IntSet -> g1 -> g2 -> Maybe (((Idx, Idx), (Idx, Idx)), IntSet, IntSet)

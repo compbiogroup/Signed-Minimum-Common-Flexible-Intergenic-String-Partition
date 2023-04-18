@@ -1,13 +1,14 @@
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE ExplicitForAll #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ImportQualifiedPost #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ExplicitForAll #-}
 
 module Genomes
   ( Genome (..),
+    IntergenicGenome (..),
     RigidIntergenicGenome (..),
     Gene,
     mkGene,
@@ -24,6 +25,7 @@ module Genomes
     mkFGenome,
     mkRGenome0,
     mkFGenome0,
+    writeIR,
     readRGenome,
     writeRGenome,
     readFGenome,
@@ -73,7 +75,7 @@ decIdx (Idx idx) = Idx (idx - 1)
 
 instance Show IR where
   show (R x) = show x
-  show (F x y) = show x ++ " | " ++ show y
+  show (F x y) = show x ++ ":" ++ show y
 
 instance Orientable Gene where
   getOri a = if a >= 0 then LR else RL
@@ -104,6 +106,9 @@ class (Show g) => Genome g where
   -- requires 1 <= i < j <= size g
   subGenome :: Idx -> Idx -> g -> g
 
+class (Genome g) => IntergenicGenome g where
+  getIR :: Idx -> g -> IR
+
 class (Genome g) => RigidIntergenicGenome g where
   intergenicReversal :: Idx -> Idx -> Int -> Int -> g -> g
 
@@ -117,9 +122,12 @@ instance Genome GenesIRs where
       j = idxToInt idxj
       n = j - i
 
-newtype GenesIRsR = GLR GenesIRs deriving newtype (Show, Genome)
+instance IntergenicGenome GenesIRs where
+  getIR idx (GenesIRs _ irs) = irs Vec.! (idxToInt idx - 1)
 
-newtype GenesIRsF = GLF GenesIRs deriving newtype (Show, Genome)
+newtype GenesIRsR = GLR GenesIRs deriving newtype (Show, Genome, IntergenicGenome)
+
+newtype GenesIRsF = GLF GenesIRs deriving newtype (Show, Genome, IntergenicGenome)
 
 mkRGenome :: [Int] -> [Int] -> GenesIRsR
 mkRGenome genes irs = GLR $ GenesIRs (Vec.fromList . coerce $ genes) (Vec.fromList . map R $ irs)
@@ -132,6 +140,11 @@ mkFGenome genes irs = GLF $ GenesIRs (Vec.fromList . coerce $ genes) (Vec.fromLi
 
 mkFGenome0 :: [Int] -> GenesIRsF
 mkFGenome0 genes = mkFGenome genes (replicate (length genes - 1) (0, 0))
+
+writeIR :: IR -> BS.ByteString
+writeIR ir = LBS.toStrict $ case ir of
+  R i -> toLazyByteString . intDec $ i
+  F l u -> (toLazyByteString . intDec $ l) <> ":" <> (toLazyByteString . intDec $ u)
 
 readRGenome :: Bool -> BS.ByteString -> BS.ByteString -> GenesIRsR
 readRGenome extend bs_genes bs_irs = mkRGenome genes irs
@@ -160,7 +173,7 @@ readFGenome extend bs_genes bs_irs = mkFGenome genes irs
     readF fir =
       case BS.splitWith (== ':') fir of
         [lir, uir] -> (readInt lir, readInt uir)
-        _ -> rror patternError
+        _ -> error patternError
 
 writeFGenome :: Bool -> GenesIRsF -> (BS.ByteString, BS.ByteString)
 writeFGenome rext g@(GLF (GenesIRs genes irs)) =

@@ -3,29 +3,29 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- |
--- Module      : MCISP2K
+-- Module      : MCFISP2K
 -- Description : Heuristic for Genome partition problems with flexible intergenic regions.
 -- Copyright   : (c) Gabriel Siqueira, 2021
 -- License     : BSD3
 -- Maintainer  : gabriel.gabrielhs@gmail.com
-module MCFISP where
+module Main (main) where
 
 import Control.Concurrent.ParallelIO.Global (parallel_, stopGlobalPool)
 import Control.DeepSeq (force)
+import Data.ByteString.Builder (intDec, toLazyByteString)
 import Data.ByteString.Char8 qualified as BS
+import Data.ByteString.Lazy qualified as LBS
 import Data.Time (diffUTCTime, getCurrentTime)
-import Genomes (readFGenome, readRGenome, writeFGenome, writeRGenome)
-import Partition (getPartition, mapToPerm, reduced)
+import Genomes (RigidFlexibleMatcher (..), readFGenome, readRGenome)
 import LocalBase
 import Options.Applicative
-import Partition ()
+import Partition (getBlocksMatchGraph, getPartition, writePartition)
 import Text.Printf (printf)
 
 data Args = Args
   { input :: String,
     output :: String,
-    noParallel :: Bool,
-    asPerm :: Bool
+    noParallel :: Bool
   }
 
 argsParser :: Parser Args
@@ -46,10 +46,6 @@ argsParser =
     <*> switch
       ( long "no-par"
           <> help "Do not process the genomes in parallel."
-      )
-    <*> switch
-      ( long "perm"
-          <> help "Whether to produce permutations from a mapping of the original strings instead of reduced genomes."
       )
 
 opts :: ParserInfo Args
@@ -74,23 +70,25 @@ main = do
   where
     runOne args (i, bstrs) = do
       start <- getCurrentTime
-      let !bstrs' = force $ simplifyGenomes bstrs
+      let !bstrs' = force $ produceBlockMatch bstrs
       end <- getCurrentTime
-      let time = BS.pack . show . realToFrac $ diffUTCTime end start
+      let time = BS.pack . (show :: Double -> String) . realToFrac $ diffUTCTime end start
       BS.writeFile (output args ++ "_" ++ printf "%04d" i) . BS.unlines $ fromAns (bstrs', "# Time: " <> (BS.pack . show $ time))
 
     toQuadruples (s1 : i1 : s2 : i2 : ss) = (s1, i1, s2, i2) : toQuadruples ss
     toQuadruples [] = []
     toQuadruples _ = error "Incorrect number of lines."
 
-    fromAns ((s1, i1, s2, i2), time) = s1 : i1 : s2 : i2 : [time]
+    fromAns ((s1, i1, s2, i2, bmg), time) = s1 : i1 : s2 : i2 : bmg : [time]
 
-simplifyGenomes :: (BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString) -> (BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString)
-simplifyGenomes (s1, i1, s2, i2) = (s1', i1', s2', i2')
+produceBlockMatch :: (BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString) -> (BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString)
+produceBlockMatch (s1, i1, s2, i2) = (s1', i1', s2', i2', bmg)
   where
-    (s1', i1') = writeRGenome False g'
-    (s2', i2') = writeFGenome False h'
+    (s1', i1', s2', i2') = writePartition part
     part = getPartition g h
-    (g', h') = if asPerm then mapToPerm part else reduced part
+    bmg = writeBlocksMatchGraph $ getBlocksMatchGraph RFM part
     g = readRGenome True s1 i1
     h = readFGenome True s2 i2
+
+writeBlocksMatchGraph :: [[Int]] -> BS.ByteString
+writeBlocksMatchGraph = BS.unwords . (\l -> interleavelists l (replicate (length l - 1) "|")) . map (BS.unwords . map (LBS.toStrict . toLazyByteString . intDec))
