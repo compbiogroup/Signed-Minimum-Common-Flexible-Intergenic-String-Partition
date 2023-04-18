@@ -5,7 +5,7 @@ module PartitionCheck (tests) where
 import Control.Monad.Random (evalRandIO)
 import qualified Data.IntSet as IntSet
 import Data.Maybe (fromJust)
-import Genomes (Genome (size, subGenome), Matcher (isMatch), RigidRigidMatcher (RRM))
+import Genomes (Genome (size, subGenome), Matcher (isMatch), RigidRigidReverseMatcher (RRRM))
 import GenomesCheck (genRGenome, rearrangeGenome)
 import Hedgehog
   ( Property,
@@ -27,8 +27,8 @@ prop_longestSubstringFromBothAreEqual =
     g <- forAll genRGenome
     k <- forAll $ Gen.int (Range.linear 0 (size g))
     h <- evalIO . evalRandIO $ rearrangeGenome k g
-    let (((g_beg, g_end), (h_beg, h_end)), _, _) = fromJust $ longestSubstring RRM IntSet.empty IntSet.empty g h
-    assert $ isMatch RRM (subGenome g_beg g_end g) (subGenome h_beg h_end h)
+    let (((g_beg, g_end), (h_beg, h_end)), _, _) = fromJust $ longestSubstring RRRM IntSet.empty IntSet.empty g h
+    assert $ isMatch RRRM (subGenome g_beg g_end g) (subGenome h_beg h_end h)
 
 tests :: IO Bool
 tests = checkSequential $$(discover)

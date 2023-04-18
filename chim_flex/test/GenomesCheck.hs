@@ -23,10 +23,10 @@ genRGenomeWithSign :: Sign -> Gen GenesIRsR
 genRGenomeWithSign sign = do
   n <- Gen.int (Range.linear 1 100)
   coins <- Gen.list (Range.singleton n) Gen.bool
-  genes <- (if signed
-          then zipWith swaps coins
-          else id)
-      <$> Gen.list (Range.singleton n - 2) genGene
+  genes <- (case sign of
+              Signed -> zipWith swaps coins
+              Unsigned -> id)
+      <$> Gen.list (Range.singleton $ n - 2) genGene
   irs <- Gen.list (Range.singleton $ n - 1) genIR
   return $ mkRGenome True sign genes irs
   where
