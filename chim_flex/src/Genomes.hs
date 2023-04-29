@@ -22,6 +22,12 @@ module Genomes
     idxToInt,
     incIdx,
     decIdx,
+    occurrence,
+    GeneMap,
+    positionMap,
+    geneMapLookup,
+    geneMapAdjust,
+    occurrenceMax,
     GenesIRsR,
     GenesIRsF,
     mkRGenome,
@@ -52,6 +58,8 @@ import Data.ByteString.Char8 qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Coerce (coerce)
 import Data.Hashable (Hashable)
+import Data.IntMap (IntMap)
+import Data.IntMap qualified as IntMap
 import Data.List qualified as List
 import Data.Maybe (fromJust)
 import Data.Set (Set)
@@ -119,7 +127,7 @@ instance Show GenesIRs where
       str_s = Vec.toList $ (\i -> if i == maxBound then "inf" else show i) <$> genes
       str_i = Vec.toList $ show <$> irs
 
-class (Show g) => Genome g where
+class Genome g where
   isGene :: g -> Gene -> Bool
   size :: g -> Int
 
@@ -144,6 +152,23 @@ class (Genome g) => RigidIntergenicGenome g where
   intergenicInsertion :: Idx -> g -> g -> g
   intergenicDeletion :: Idx -> Idx -> Int -> g -> g
 
+occurrence :: (Genome g) => g -> Gene -> Int
+occurrence g a = sum . fmap (\i -> if abs (getGene (Idx i) g) == a then 1 else 0) $ [1 .. size g]
+
+newtype GeneMap a = GM (IntMap a) deriving newtype (Functor, Foldable)
+
+positionMap :: (Genome g) => g -> GeneMap [Idx]
+positionMap g = GM . IntMap.fromListWith (++) . map (\i -> (geneToInt . abs $ getGene i g, [i])) $ [1 .. mkIdx (size g)]
+
+geneMapLookup :: Gene -> GeneMap a -> Maybe a
+geneMapLookup a (GM gm) = IntMap.lookup (geneToInt $ abs a) gm
+
+geneMapAdjust :: (a -> a) -> Gene -> GeneMap a -> GeneMap a
+geneMapAdjust f a (GM gm) = GM $ IntMap.adjust f (geneToInt $ abs a) gm
+
+occurrenceMax :: (Genome g) => g -> Int
+occurrenceMax = maximum . fmap length . positionMap
+
 instance Genome GenesIRs where
   isGene (GenesIRs _ genes _) a = a `elem` genes
   size (GenesIRs _ genes _) = Vec.length genes
@@ -161,6 +186,10 @@ instance IntergenicGenome GenesIRs where
 newtype GenesIRsR = GLR GenesIRs deriving newtype (Show, Genome, IntergenicGenome)
 
 newtype GenesIRsF = GLF GenesIRs deriving newtype (Show, Genome, IntergenicGenome)
+
+instance Eq GenesIRsR where
+  (GLR (GenesIRs sign1 genes1 irs1)) == (GLR (GenesIRs sign2 genes2 irs2)) =
+    sign1 == sign2 && genes1 == genes2 && irs1 == irs2
 
 mkRGenome :: Bool -> Sign -> [Int] -> [Int] -> GenesIRsR
 mkRGenome ext sign genes_ irs = GLR $ GenesIRs sign (Vec.fromList . coerce $ genes) (Vec.fromList . map R $ irs)
@@ -223,7 +252,7 @@ writeFGenome rext g@(GLF (GenesIRs _ genes irs)) =
 flexibilize :: Int -> GenesIRsR -> GenesIRsF
 flexibilize l (GLR (GenesIRs sign genes irs)) = GLF $ GenesIRs sign genes irs'
   where
-    irs' = (\i -> F (i - (l*i `div` 100)) (i + (l*i `div` 100))) . irToInt <$> irs
+    irs' = (\i -> F (i - (l * i `div` 100)) (i + (l * i `div` 100))) . irToInt <$> irs
 
 instance RigidIntergenicGenome GenesIRsR where
   intergenicFullReversal (GLR (GenesIRs sign vs vi)) = GLR $ GenesIRs sign vs' vi'
@@ -340,6 +369,8 @@ instance RigidIntergenicGenome GenesIRsR where
 
 class Matcher m g1 g2 where
   isMatch :: m g1 g2 -> g1 -> g2 -> Bool
+  isDirectMatch :: m g1 g2 -> g1 -> g2 -> Bool
+  isReverseMatch :: m g1 g2 -> g1 -> g2 -> Bool
 
 data RigidRigidDirectMatcher g1 g2 = RRDM
 
@@ -350,22 +381,29 @@ data RigidRigidReverseMatcher g1 g2 = RRRM
 data RigidFlexibleReverseMatcher g1 g2 = RFRM
 
 instance Matcher RigidRigidDirectMatcher GenesIRsR GenesIRsR where
-  isMatch RRDM (GLR (GenesIRs _ genesG irsG)) (GLR (GenesIRs _ genesH irsH)) =
-    genesG == genesH && irsG == irsH
+  isMatch = isDirectMatch
+  isDirectMatch _ g h = g == h
+  isReverseMatch _ g = isMatch RRDM (intergenicFullReversal g)
 
 instance Matcher RigidFlexibleDirectMatcher GenesIRsR GenesIRsF where
-  isMatch RFDM (GLR (GenesIRs _ genesG irsG)) (GLF (GenesIRs _ genesH irsH)) =
+  isMatch = isDirectMatch
+  isDirectMatch RFDM (GLR (GenesIRs _ genesG irsG)) (GLF (GenesIRs _ genesH irsH)) =
     genesG == genesH && and (Vec.zipWith check irsG irsH)
     where
       check :: IR -> IR -> Bool
       check (R ir) (F irl irr) = (irl <= ir) && (ir <= irr)
       check _ _ = error patternError
+  isReverseMatch _ g = isMatch RFDM (intergenicFullReversal g)
 
 instance Matcher RigidRigidReverseMatcher GenesIRsR GenesIRsR where
-  isMatch RRRM g h = isMatch RRDM g h || isMatch RRDM (intergenicFullReversal g) h
+  isMatch RRRM g h = isDirectMatch RRRM g h || isReverseMatch RRRM g h
+  isDirectMatch _ = isDirectMatch RRDM
+  isReverseMatch _ = isReverseMatch RRDM
 
 instance Matcher RigidFlexibleReverseMatcher GenesIRsR GenesIRsF where
-  isMatch RFRM g h = isMatch RFDM g h || isMatch RFDM (intergenicFullReversal g) h
+  isMatch RFRM g h = isDirectMatch RFRM g h || isReverseMatch RFRM g h
+  isDirectMatch _ = isDirectMatch RFDM
+  isReverseMatch _ = isReverseMatch RFDM
 
 randomGenome :: MonadRandom mon => Bool -> Int -> Int -> Sign -> mon GenesIRsR
 randomGenome zeros n lim signed = do
@@ -381,7 +419,7 @@ randomGenome zeros n lim signed = do
 randomGenomeWithReplicas :: MonadRandom mon => Bool -> Int -> Int -> Int -> Int -> Sign -> mon GenesIRsR
 randomGenomeWithReplicas zeros n rep low high signed = do
   coins <- getRandoms
-  occs <- getRandomRs (fromIntegral low, fromIntegral high)
+  occs <- getRandomRs (low, high)
   let ls =
         ( case signed of
             Unsigned -> id

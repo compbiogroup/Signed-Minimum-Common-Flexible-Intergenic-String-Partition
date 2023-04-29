@@ -1,12 +1,14 @@
 {-# LANGUAGE ExplicitForAll #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Partition
   ( greedyPart,
+    soarPartition,
     getPartition,
     writePartition,
     getBlocksMatchGraph,
@@ -14,13 +16,15 @@ module Partition
   )
 where
 
+import Data.Bits (Bits, complement, setBit, testBit, zeroBits, (.|.))
 import Data.ByteString.Char8 qualified as BS
 import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
 import Data.List qualified as List
-import Data.Maybe (fromMaybe, mapMaybe)
-import Genomes (GenesIRsF, GenesIRsR, Genome (..), Idx, IntergenicGenome (..), Matcher (..), RigidFlexibleReverseMatcher (..), decIdx, idxDist, idxToInt, incIdx, mkIdx, writeFGenome, writeIR, writeRGenome)
+import Data.Maybe (catMaybes, fromMaybe, listToMaybe, mapMaybe)
+import Genomes (GenesIRsF, GenesIRsR, Genome (..), Idx, IntergenicGenome (..), Matcher (..), RigidFlexibleReverseMatcher (..), decIdx, geneMapLookup, idxDist, idxToInt, incIdx, mkIdx, positionMap, writeFGenome, writeIR, writeRGenome)
 import LocalBase
+import Text.Printf (PrintfArg, printf)
 
 type Breakpoint = [Idx]
 
@@ -125,3 +129,155 @@ longestSubstring matcher genesOnBlocksG genesOnBlocksH g h =
       where
         jg' = incIdx jg
         jh' = incIdx jh
+
+combine :: Partition g1 g2 -> Partition g1 g2
+combine (GenomePartition g h bg bh) = undefined
+
+soarPartition :: (Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> g1 -> g2 -> Partition g1 g2
+soarPartition matcher g h = part -- combine part
+  where
+    part = GenomePartition g h (cleanList breaksG) (cleanList breaksH)
+    cleanList = map head . List.group . List.sort
+    graph = makePMGraph4 matcher g h
+    (breaksG, breaksH) = (`getBpsFromIS` graph) . independentSet $ graph
+
+newtype BitMask = BM Integer deriving (Eq, Ord, Bits, PrintfArg)
+
+instance Show BitMask where
+  show = printf "%llb"
+
+class PMGraph pmg where
+  independentSet :: pmg -> BitMask
+  vertexCover :: pmg -> BitMask
+
+  independentSet = complement . vertexCover
+  vertexCover = complement . independentSet
+
+type Vertex = Int
+
+type Edge = (Vertex, Vertex)
+
+type PairMatch g1 g2 = (g1, g2, Idx, Idx, Vertex)
+
+data PMGraph4 g1 g2 = PMGraph4 [Edge] [PairMatch g1 g2]
+
+isConflict :: (Matcher m g1 g2) => m g1 g2 -> PairMatch g1 g2 -> PairMatch g1 g2 -> Bool
+isConflict matcher pm@(due1, due2, idx1, idx2, _) pm'@(_, _, idx1', idx2', _) =
+  if idx1 > idx1'
+    then isConflict matcher pm' pm
+    else
+      idx1 == idx1' && (idx2 /= idx2')
+        || idx1 + 1 < idx1' && (List.intersect [idx2, idx2 + 1] [idx2', idx2' + 1] /= [])
+        || idx1 + 1 == idx1'
+          && not
+            ( idx2 + 1 == idx2' && isDirectMatch matcher due1 due2
+                || idx2 == idx2' + 1 && isReverseMatch matcher due1 due2
+            )
+
+makePMGraph4 :: (Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> g1 -> g2 -> PMGraph4 g1 g2
+makePMGraph4 matcher g h = PMGraph4 edges pms
+  where
+    edges = catMaybes (testEdge <$> pms <*> pms)
+    testEdge pm1@(_, _, _, _, v) pm2@(_, _, _, _, u) =
+      if isConflict matcher pm1 pm2
+        then Just (v, u)
+        else Nothing
+    pms = zipWith addVertex [1 ..] . catMaybes $ (check <$> duesG <*> duesH)
+    addVertex v (due1, due2, idx1, idx2) = (due1, due2, mkIdx idx1, mkIdx idx2, v)
+    check (idx1, due1) (idx2, due2) =
+      if isMatch matcher due1 due2
+        then Just (due1, due2, idx1, idx2)
+        else Nothing
+    duesG = map (\i -> (i, subGenome (mkIdx i) (mkIdx (i + 1)) g)) [1 .. (size g - 1)]
+    duesH = map (\i -> (i, subGenome (mkIdx i) (mkIdx (i + 1)) h)) [1 .. (size h - 1)]
+
+instance PMGraph (PMGraph4 g1 g2) where
+  vertexCover (PMGraph4 edges _) = foldr coverEdges zeroBits edges
+    where
+      coverEdges :: Edge -> BitMask -> BitMask
+      coverEdges (u, v) onCover
+        | not (testBit onCover u) && not (testBit onCover v) = setBit (setBit onCover u) v
+        | otherwise = onCover
+
+getBpsFromIS :: BitMask -> PMGraph4 g1 g2 -> ([Idx], [Idx])
+getBpsFromIS indSet (PMGraph4 _ pms) = (getBPS False, getBPS True)
+  where
+    getBPS isSecond =
+      mapMaybe
+        ( \(_, _, idx1, idx2, v) ->
+            if testBit indSet v
+              then Just (if isSecond then idx2 else idx1)
+              else Nothing
+        )
+        pms
+
+-- | Match two correspondent intervals a^l...a^r from g and b^l...b^r from h.
+suboptimalRuleInterval :: (Matcher m g1 g2, Genome g1, Genome g2) => m g1 g2 -> g1 -> g2 -> (g1, g2)
+suboptimalRuleInterval matcher g h = head $ do
+  return (undefined, undefined)
+  where
+    posMapG = positionMap g
+    posMapH = positionMap h
+    originallySingleton i =
+      (case geneMapLookup (getGene i g) posMapG of Nothing -> False; Just pos -> length pos == 1)
+        && (case geneMapLookup (getGene i g) posMapH of Nothing -> False; Just pos -> length pos == 1)
+
+    -- candidates for indices of a^l in a^l...a^r
+    is = filter originallySingleton [1 .. mkIdx (size g)]
+    -- combine is with the correspondent indices in h
+    is_js =
+      map
+        ( \i -> case geneMapLookup (getGene i g) posMapH of
+            Just [j] -> (i, j)
+            _ -> error patternError
+        )
+        is
+
+    -- check if the interval is a direct match (a^l...a^r = b^l...b^r) and
+    -- returns indices of (a^l,a^r,b^l,b^r)
+    checkDirMatch i j = do
+      k <- listToMaybe k_result
+      return (i, i + k, j, j + k)
+      where
+        -- k is the displacement from a^l to a^r
+        ks = [1 .. (min (mkIdx (size g) - i) (mkIdx (size h) - j))]
+        matches = map fst . takeWhile snd $ map (\k -> (k, isMatch matcher (subGenome (i + k - 1) (i + k) g) (subGenome (j + k - 1) (j + k) h))) ks
+        k_result = filter (\k -> k > 1 && originallySingleton (i + k)) matches
+
+    -- check if the interval is a reverse match (a^l...a^r = -b^r...-b^l) and
+    -- returns indices of (a^l,a^r,b^l,b^r)
+    checkRevMatch i j = do
+      k <- listToMaybe k_result
+      return (i, i + k, j - k, j)
+      where
+        -- k is the displacement from a^l to a^r
+        ks = [1 .. (min (mkIdx (size g) - i) (j - 1))]
+        matches = map fst . takeWhile snd $ map (\k -> (k, isMatch matcher (subGenome (i + k - 1) (i + k) g) (subGenome (j - k) (j - k + 1) h))) ks
+        k_result = filter (\k -> k > 1 && originallySingleton (i + k)) matches
+
+    -- check if the middle is a reverse match
+    -- (a^la^{l+1}...a^{r-1}a^r = b^l-b^{r-1}...-b^{l+1}b^r) and
+    -- returns indices of (a^l,a^r,b^l,b^r)
+    checkMiddleMatch i j = do
+      idxAr <- getIdxAr
+      k <- k_result idxAr
+      return (i, idxAr, j, j + k)
+      where
+        getIdxAr = List.find originallySingleton [i + 1 .. mkIdx (size g)]
+        -- k is the displacement from a^l to a^r
+        ks idxAr = [2 .. idxAr - i - 1]
+        matches idxAr = map fst . takeWhile snd . map (\k -> (k, isMatch matcher (subGenome (idxAr - k) (idxAr - k + 1) g) (subGenome (j + k - 1) (j + k) h))) $ ks idxAr
+        k_result idxAr =
+          if idxAr - i > mkIdx (size h) - j
+            || not
+              ( isMatch
+                  matcher
+                  (subGenome idxAr idxAr g)
+                  (subGenome (j + idxAr - i) (j + idxAr - i) h)
+              )
+            then Nothing
+            else listToMaybe (matches idxAr)
+
+-- | Match pair of a singleton and a replica. The replica in mapped into singleton.
+suboptimalRulePairs :: g1 -> g2 -> (g1, g2)
+suboptimalRulePairs g h = undefined
