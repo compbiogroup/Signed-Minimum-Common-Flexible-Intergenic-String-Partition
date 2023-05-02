@@ -16,13 +16,14 @@ module Partition
   )
 where
 
-import Data.Bits (Bits, complement, setBit, testBit, zeroBits, (.|.))
+import Data.Bits (Bits, complement, setBit, testBit, zeroBits)
 import Data.ByteString.Char8 qualified as BS
+import Data.Foldable (toList)
 import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
 import Data.List qualified as List
-import Data.Maybe (catMaybes, fromMaybe, listToMaybe, mapMaybe)
-import Genomes (GenesIRsF, GenesIRsR, Genome (..), Idx, IntergenicGenome (..), Matcher (..), RigidFlexibleReverseMatcher (..), decIdx, geneMapLookup, idxDist, idxToInt, incIdx, mkIdx, positionMap, writeFGenome, writeIR, writeRGenome)
+import Data.Maybe (catMaybes, listToMaybe, mapMaybe, maybeToList)
+import Genomes (Gene, GeneMap, GenesIRsF, GenesIRsR, Genome (..), Idx, IntergenicGenome (..), Matcher (..), RigidFlexibleReverseMatcher (..), decIdx, geneMapLookup, idxDist, idxToInt, incIdx, mkIdx, positionMap, writeFGenome, writeIR, writeRGenome)
 import LocalBase
 import Text.Printf (PrintfArg, printf)
 
@@ -40,7 +41,7 @@ instance Show (Partition GenesIRsR GenesIRsF) where
       getSub write g' i succi = write $ subGenome (incIdx i) succi g'
 
 getPartition :: GenesIRsR -> GenesIRsF -> Partition GenesIRsR GenesIRsF
-getPartition = greedyPart RFRM
+getPartition = greedyPart True RFRM
 
 writePartition :: Partition GenesIRsR GenesIRsF -> (BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString)
 writePartition (GenomePartition g h bg bh) = (genes_bs_g, irs_bs_g, genes_bs_h, irs_bs_h)
@@ -65,27 +66,43 @@ getBlocksMatchGraph macher (GenomePartition g h bg bh) =
   where
     getSub g' i succi = subGenome (incIdx i) succi g'
 
--- TODO: add withSin, see original code
-
 -- | Greedy algorithm for string partition with intergenic regions or
--- flexible intergeic regions
-greedyPart :: (Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> g1 -> g2 -> Partition g1 g2
-greedyPart matcher g h = GenomePartition g h (cleanList final_breaksG) (cleanList final_breaksH)
+-- flexible intergeic regions. If withSingleton is True it looks first
+-- for matched blocks that contain a singleton.
+greedyPart :: (Genome g1, Genome g2, Matcher m g1 g2) => Bool -> m g1 g2 -> g1 -> g2 -> Partition g1 g2
+greedyPart withSingleton matcher g h = GenomePartition g h (cleanList final_breaksG) (cleanList final_breaksH)
   where
     cleanList = map head . List.group . List.sort
-    (final_breaksG, final_breaksH) = getAllLS IntSet.empty IntSet.empty [] []
-    getAllLS genesOnBlocksG genesOnBlocksH breaksG breaksH =
-      case longestSubstring matcher genesOnBlocksG genesOnBlocksH g h of
-        Nothing -> (breaksG, breaksH)
-        Just (((g_beg, g_end), (h_beg, h_end)), genesOnBlocksG', genesOnBlocksH') ->
+    (final_breaksG, final_breaksH) = getAllLS all_singletons IntSet.empty IntSet.empty [] []
+    getAllLS singletons genesOnBlocksG genesOnBlocksH breaksG breaksH =
+      case longestSubstring' singletons of
+        ([], Nothing) -> (breaksG, breaksH)
+        (other_singletons, Nothing) -> getAllLS other_singletons genesOnBlocksG genesOnBlocksH breaksG breaksH
+        (other_singletons, Just (((g_beg, g_end), (h_beg, h_end)), genesOnBlocksG', genesOnBlocksH')) ->
           let breaksG' = (decIdx g_beg : g_end : breaksG)
               breaksH' = (decIdx h_beg : h_end : breaksH)
-           in getAllLS genesOnBlocksG' genesOnBlocksH' breaksG' breaksH'
+           in getAllLS other_singletons genesOnBlocksG' genesOnBlocksH' breaksG' breaksH'
+      where
+        longestSubstring' (singleton : other_singletons) = (other_singletons, longestSubstring (Just singleton) matcher genesOnBlocksG genesOnBlocksH g h)
+        longestSubstring' [] = ([], longestSubstring Nothing matcher genesOnBlocksG genesOnBlocksH g h)
 
-longestSubstring :: forall m g1 g2. (Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> IntSet -> IntSet -> g1 -> g2 -> Maybe (((Idx, Idx), (Idx, Idx)), IntSet, IntSet)
+    all_singletons =
+      if withSingleton
+        then filter (singletonOnBoth posMapG posMapH) . toList $ alphabet g
+        else []
+    posMapG = positionMap g
+    posMapH = positionMap h
+
+singletonOnBoth :: GeneMap [Idx] -> GeneMap [Idx] -> Gene -> Bool
+singletonOnBoth posMapG posMapH gene =
+  (case geneMapLookup gene posMapG of Nothing -> False; Just pos -> length pos == 1)
+    && (case geneMapLookup gene posMapH of Nothing -> False; Just pos -> length pos == 1)
+
+longestSubstring :: forall m g1 g2. (Genome g1, Genome g2, Matcher m g1 g2) => Maybe Gene -> m g1 g2 -> IntSet -> IntSet -> g1 -> g2 -> Maybe (((Idx, Idx), (Idx, Idx)), IntSet, IntSet)
 -- Find longest substring of l1 and l2, ignore genes already in a block
--- returns the indices of the correspondent subgenomes in g and h (first and last gene)
-longestSubstring matcher genesOnBlocksG genesOnBlocksH g h =
+-- returns the indices of the correspondent subgenomes in g and h (first and last gene).
+-- If singleton has a value (Just x), only consider blocks containing that gene x.
+longestSubstring maybe_singleton matcher genesOnBlocksG genesOnBlocksH g h =
   case maybe_inds of
     Nothing -> Nothing
     Just inds@((g_beg, g_end), (h_beg, h_end)) ->
@@ -107,15 +124,21 @@ longestSubstring matcher genesOnBlocksG genesOnBlocksH g h =
     -- returns the indices of the correspondent subgenomes in g and h (first and last gene)
     longestMatch ig = maxWith (uncurry idxDist . fst) $ do
       ih <- map mkIdx . filter (`IntSet.notMember` genesOnBlocksH) $ [1 .. size h]
-      (endCPG, endCPH) <- fromMaybe [] . fmap (: []) $ commonPrefix ig ih
-      return ((ig, endCPG), (ih, endCPH))
+      maybeToList $ commonPrefix ig ih
 
-    commonPrefix :: Idx -> Idx -> Maybe (Idx, Idx)
+    commonPrefix :: Idx -> Idx -> Maybe ((Idx, Idx), (Idx, Idx))
     -- find common prefix of subgenome of g starting with ig
     -- and subgenome of h starting with ih
     -- returns Nothing if the prefix is empty
     -- returns indices for the ends of both subgenomes otherwise
-    commonPrefix ig ih = if getGene ig g /= getGene ih h then Nothing else Just $ commonPrefix' ig ig ih ih
+    commonPrefix ig ih = do
+      (endCPG, endCPH) <- (if getGene ig g /= getGene ih h then Nothing else Just $ commonPrefix' ig ig ih ih)
+      case maybe_singleton of
+        Just singleton ->
+          if singleton `isGene` subGenome ig endCPG g
+            then return ((ig, endCPG), (ih, endCPH))
+            else Nothing
+        Nothing -> return ((ig, endCPG), (ih, endCPH))
 
     commonPrefix' :: Idx -> Idx -> Idx -> Idx -> (Idx, Idx)
     commonPrefix' ig jg ih jh =
@@ -218,9 +241,7 @@ suboptimalRuleInterval matcher g h = head $ do
   where
     posMapG = positionMap g
     posMapH = positionMap h
-    originallySingleton i =
-      (case geneMapLookup (getGene i g) posMapG of Nothing -> False; Just pos -> length pos == 1)
-        && (case geneMapLookup (getGene i g) posMapH of Nothing -> False; Just pos -> length pos == 1)
+    originallySingleton i = singletonOnBoth posMapG posMapH (getGene i g)
 
     -- candidates for indices of a^l in a^l...a^r
     is = filter originallySingleton [1 .. mkIdx (size g)]

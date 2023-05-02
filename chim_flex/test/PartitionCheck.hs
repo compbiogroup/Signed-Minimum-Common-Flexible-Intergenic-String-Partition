@@ -27,7 +27,7 @@ prop_longestSubstringFromBothAreEqual =
     g <- forAll genRGenome
     k <- forAll $ Gen.int (Range.linear 0 (size g))
     h <- evalIO . evalRandIO $ rearrangeGenome k g
-    let (((g_beg, g_end), (h_beg, h_end)), _, _) = fromJust $ longestSubstring RRRM IntSet.empty IntSet.empty g h
+    let (((g_beg, g_end), (h_beg, h_end)), _, _) = fromJust $ longestSubstring Nothing RRRM IntSet.empty IntSet.empty g h
     assert $ isMatch RRRM (subGenome g_beg g_end g) (subGenome h_beg h_end h)
 
 tests :: IO Bool

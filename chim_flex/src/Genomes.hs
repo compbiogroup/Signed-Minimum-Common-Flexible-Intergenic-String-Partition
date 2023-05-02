@@ -128,7 +128,7 @@ instance Show GenesIRs where
       str_i = Vec.toList $ show <$> irs
 
 class Genome g where
-  isGene :: g -> Gene -> Bool
+  isGene :: Gene -> g -> Bool
   size :: g -> Int
 
   -- get gene at position i (index starts in 1), requires 1 <= i <= size g
@@ -170,7 +170,7 @@ occurrenceMax :: (Genome g) => g -> Int
 occurrenceMax = maximum . fmap length . positionMap
 
 instance Genome GenesIRs where
-  isGene (GenesIRs _ genes _) a = a `elem` genes
+  isGene gene (GenesIRs _ genes _) = gene `elem` genes
   size (GenesIRs _ genes _) = Vec.length genes
   getGene idx (GenesIRs _ genes _) = genes Vec.! (idxToInt idx - 1)
   subGenome idxi idxj (GenesIRs sign genes irs) = GenesIRs sign (Vec.slice i n genes) (Vec.slice i (n - 1) irs)
