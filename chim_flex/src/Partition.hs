@@ -76,15 +76,16 @@ greedyPart withSingleton matcher g h = GenomePartition g h (cleanList final_brea
     (final_breaksG, final_breaksH) = getAllLS all_singletons IntSet.empty IntSet.empty [] []
     getAllLS singletons genesOnBlocksG genesOnBlocksH breaksG breaksH =
       case longestSubstring' singletons of
-        ([], Nothing) -> (breaksG, breaksH)
-        (other_singletons, Nothing) -> getAllLS other_singletons genesOnBlocksG genesOnBlocksH breaksG breaksH
-        (other_singletons, Just (((g_beg, g_end), (h_beg, h_end)), genesOnBlocksG', genesOnBlocksH')) ->
+        (Nothing, Nothing) -> (breaksG, breaksH)
+        (Just other_singletons, Nothing) -> getAllLS other_singletons genesOnBlocksG genesOnBlocksH breaksG breaksH
+        (Just other_singletons, Just (((g_beg, g_end), (h_beg, h_end)), genesOnBlocksG', genesOnBlocksH')) ->
           let breaksG' = (decIdx g_beg : g_end : breaksG)
               breaksH' = (decIdx h_beg : h_end : breaksH)
            in getAllLS other_singletons genesOnBlocksG' genesOnBlocksH' breaksG' breaksH'
+        (Nothing, Just _) -> error patternError
       where
-        longestSubstring' (singleton : other_singletons) = (other_singletons, longestSubstring (Just singleton) matcher genesOnBlocksG genesOnBlocksH g h)
-        longestSubstring' [] = ([], longestSubstring Nothing matcher genesOnBlocksG genesOnBlocksH g h)
+        longestSubstring' (singleton : other_singletons) = (Just other_singletons, longestSubstring (Just singleton) matcher genesOnBlocksG genesOnBlocksH g h)
+        longestSubstring' [] = (Nothing, longestSubstring Nothing matcher genesOnBlocksG genesOnBlocksH g h)
 
     all_singletons =
       if withSingleton
