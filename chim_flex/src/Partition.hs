@@ -22,7 +22,7 @@ import Data.Foldable (toList)
 import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
 import Data.List qualified as List
-import Data.Maybe (catMaybes, listToMaybe, mapMaybe, maybeToList)
+import Data.Maybe (catMaybes, listToMaybe, mapMaybe, maybeToList, fromMaybe)
 import Genomes (Gene, GeneMap, GenesIRsF, GenesIRsR, Genome (..), Idx, IntergenicGenome (..), Matcher (..), RigidFlexibleReverseMatcher (..), decIdx, geneMapLookup, idxDist, idxToInt, incIdx, mkIdx, positionMap, writeFGenome, writeIR, writeRGenome)
 import LocalBase
 import Text.Printf (PrintfArg, printf)
@@ -78,11 +78,10 @@ greedyPart withSingleton matcher g h = GenomePartition g h (cleanList final_brea
       case longestSubstring' singletons of
         (Nothing, Nothing) -> (breaksG, breaksH)
         (Just other_singletons, Nothing) -> getAllLS other_singletons genesOnBlocksG genesOnBlocksH breaksG breaksH
-        (Just other_singletons, Just (((g_beg, g_end), (h_beg, h_end)), genesOnBlocksG', genesOnBlocksH')) ->
+        (maybe_other_singletons, Just (((g_beg, g_end), (h_beg, h_end)), genesOnBlocksG', genesOnBlocksH')) ->
           let breaksG' = (decIdx g_beg : g_end : breaksG)
               breaksH' = (decIdx h_beg : h_end : breaksH)
-           in getAllLS other_singletons genesOnBlocksG' genesOnBlocksH' breaksG' breaksH'
-        (Nothing, Just _) -> error patternError
+           in getAllLS (fromMaybe [] maybe_other_singletons) genesOnBlocksG' genesOnBlocksH' breaksG' breaksH'
       where
         longestSubstring' (singleton : other_singletons) = (Just other_singletons, longestSubstring (Just singleton) matcher genesOnBlocksG genesOnBlocksH g h)
         longestSubstring' [] = (Nothing, longestSubstring Nothing matcher genesOnBlocksG genesOnBlocksH g h)
