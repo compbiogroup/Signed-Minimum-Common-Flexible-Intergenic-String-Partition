@@ -174,7 +174,7 @@ soarPartition matcher g_ h_ = part -- combine part
     part = GenomePartition g h (cleanList breaksG) (cleanList breaksH)
     cleanList = map head . List.group . List.sort
     graph = makePMGraph4 matcher g h
-    (breaksG, breaksH) = traceValue . (getBpsFromIS nG nH graph) . independentSet $ graph
+    (breaksG, breaksH) = (getBpsFromIS nG nH graph) . independentSet $ graph
 
 newtype BitMask = BM Integer deriving (Eq, Ord, Bits, PrintfArg)
 
