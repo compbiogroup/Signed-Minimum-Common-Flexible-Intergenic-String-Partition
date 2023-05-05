@@ -117,10 +117,10 @@ data Sign = Signed | Unsigned deriving (Eq, Show, Enum)
 -- Representation with a list of genes and a list of intergenic regions
 -- (only ints for regid, or intervals for flexible)
 -- We assume that the genome starts and end with genes
-data GenesIRs = GenesIRs Sign (Vector Gene) (Vector IR)
+data GenesIRs = GenesIRs Sign (Vector Gene) (Vector IR) Gene
 
 instance Show GenesIRs where
-  show (GenesIRs _ genes irs) =
+  show (GenesIRs _ genes irs _) =
     unwords . (("(" ++ head str_s ++ ")") :) $
       zipWith (\ir a -> "- " ++ ir ++ " - (" ++ a ++ ")") str_i (tail str_s)
     where
@@ -134,13 +134,32 @@ class Genome g where
   -- get gene at position i (index starts in 1), requires 1 <= i <= size g
   getGene :: Idx -> g -> Gene
 
-  -- for indices i j, it gets the subgenome starting at gene position i
+  -- invert gene according to the characteristics of the genome
+  -- (takes into account if the genome has known orientation)
+  invGene :: g -> Gene -> Gene
+
+  -- set genes at indices requires 1 < i < size g,
+  -- for each index i
+  setGenes :: [Idx] -> [Gene] -> g -> g
+
+  -- for indices i j, it gets the subgenome
+  -- starting at gene position i
   -- and ending at gene position j
   -- requires 1 <= i < j <= size g
   subGenome :: Idx -> Idx -> g -> g
 
   -- Return set with all the gene values
   alphabet :: g -> Set Gene
+
+  -- Get a gene that does not apear on the genome
+  getNewGene :: g -> Gene
+
+  -- Replace genes in indices with a new singleton gene
+  -- (does not have any replica in the genome),
+  -- and the singleton that replace each index.
+  -- Also ensures that they are singletons in g2.
+  -- Requires 1 < i < size g.
+  makeSingletons :: (Genome g2) => g2 -> [Idx] -> g -> (g, [Gene])
 
 class (Genome g) => IntergenicGenome g where
   getIR :: Idx -> g -> IR
@@ -170,39 +189,65 @@ occurrenceMax :: (Genome g) => g -> Int
 occurrenceMax = maximum . fmap length . positionMap
 
 instance Genome GenesIRs where
-  isGene gene (GenesIRs _ genes _) = gene `elem` genes
-  size (GenesIRs _ genes _) = Vec.length genes
-  getGene idx (GenesIRs _ genes _) = genes Vec.! (idxToInt idx - 1)
-  subGenome idxi idxj (GenesIRs sign genes irs) = GenesIRs sign (Vec.slice i n genes) (Vec.slice i (n - 1) irs)
+  isGene gene (GenesIRs sign genes _ _) = gene `elem` genes || 
+    case sign of
+      Signed -> (-gene) `elem` genes
+      Unsigned -> False
+  size (GenesIRs _ genes _ _) = Vec.length genes
+  getGene idx (GenesIRs _ genes _ _) = genes Vec.! (idxToInt idx - 1)
+
+  invGene (GenesIRs sign _ _ _) a =
+    case sign of Signed -> -a; Unsigned -> a
+
+  setGenes idxs new_genes (GenesIRs sign genes irs new) = GenesIRs sign genes' irs new'
+    where
+      genes' = Vec.modify update genes
+      update v =
+        mapM_ (\(idx, gene) -> MVec.write v (idxToInt idx - 1) gene) $
+          zip idxs new_genes
+      new' = foldr (\gene n -> if abs gene >= n then abs gene + 1 else n) new new_genes
+
+  subGenome idxi idxj (GenesIRs sign genes irs new) = GenesIRs sign (Vec.slice i n genes) (Vec.slice i (n - 1) irs) new
     where
       i = idxToInt idxi - 1
       j = idxToInt idxj
       n = j - i
-  alphabet (GenesIRs _ genes _) = Set.fromList . Vec.toList . fmap abs $ genes
+  alphabet (GenesIRs _ genes _ _) = Set.fromList . Vec.toList . fmap abs $ genes
+
+  -- In this implementation the new gene is bigger than all other genes except for maxBound
+  getNewGene (GenesIRs _ _ _ new) = new
+
+  makeSingletons h idxs g@(GenesIRs _ _ _ new_g) = (g', new_genes)
+    where
+      g' = setGenes idxs new_genes g
+      new_h = getNewGene h
+      new_genes = take (length idxs) [max new_g new_h ..]
 
 instance IntergenicGenome GenesIRs where
-  getIR idx (GenesIRs _ _ irs) = irs Vec.! (idxToInt idx - 1)
+  getIR idx (GenesIRs _ _ irs _) = irs Vec.! (idxToInt idx - 1)
 
 newtype GenesIRsR = GLR GenesIRs deriving newtype (Show, Genome, IntergenicGenome)
 
 newtype GenesIRsF = GLF GenesIRs deriving newtype (Show, Genome, IntergenicGenome)
 
 instance Eq GenesIRsR where
-  (GLR (GenesIRs sign1 genes1 irs1)) == (GLR (GenesIRs sign2 genes2 irs2)) =
+  (GLR (GenesIRs sign1 genes1 irs1 _)) == (GLR (GenesIRs sign2 genes2 irs2 _)) =
     sign1 == sign2 && genes1 == genes2 && irs1 == irs2
 
 mkRGenome :: Bool -> Sign -> [Int] -> [Int] -> GenesIRsR
-mkRGenome ext sign genes_ irs = GLR $ GenesIRs sign (Vec.fromList . coerce $ genes) (Vec.fromList . map R $ irs)
+mkRGenome ext sign genes_ irs = GLR $ GenesIRs sign (Vec.fromList . coerce $ genes) (Vec.fromList . map R $ irs) (Gene new)
   where
     genes = if ext then 0 : (genes_ ++ [maxBound]) else genes_
+    new = maximum (map abs genes_) + 1
 
 mkRGenome0 :: Sign -> [Int] -> GenesIRsR
 mkRGenome0 sign genes = mkRGenome True sign genes (replicate (length genes - 1) 0)
 
 mkFGenome :: Bool -> Sign -> [Int] -> [(Int, Int)] -> GenesIRsF
-mkFGenome ext sign genes_ irs = GLF $ GenesIRs sign (Vec.fromList . coerce $ genes) (Vec.fromList . map (uncurry F) $ irs)
+mkFGenome ext sign genes_ irs = GLF $ GenesIRs sign (Vec.fromList . coerce $ genes) (Vec.fromList . map (uncurry F) $ irs) (Gene new)
   where
     genes = if ext then 0 : (genes_ ++ [maxBound]) else genes_
+    new = maximum (map abs genes_) + 1
 
 mkFGenome0 :: Sign -> [Int] -> GenesIRsF
 mkFGenome0 sign genes = mkFGenome True sign genes (replicate (length genes - 1) (0, 0))
@@ -220,7 +265,7 @@ readRGenome extend sign bs_genes bs_irs = mkRGenome extend sign genes irs
     irs = map readInt . BS.splitWith (\x -> x == ',' || x == ' ') $ bs_irs
 
 writeRGenome :: Bool -> GenesIRsR -> (BS.ByteString, BS.ByteString)
-writeRGenome rext g@(GLR (GenesIRs _ genes irs)) =
+writeRGenome rext g@(GLR (GenesIRs _ genes irs _)) =
   ( BS.unwords . fmap (LBS.toStrict . toLazyByteString . intDec . coerce) $ l_genes,
     BS.unwords . fmap (LBS.toStrict . toLazyByteString . intDec) $ l_irs
   )
@@ -240,7 +285,7 @@ readFGenome extend sign bs_genes bs_irs = mkFGenome extend sign genes irs
         _ -> error patternError
 
 writeFGenome :: Bool -> GenesIRsF -> (BS.ByteString, BS.ByteString)
-writeFGenome rext g@(GLF (GenesIRs _ genes irs)) =
+writeFGenome rext g@(GLF (GenesIRs _ genes irs _)) =
   ( BS.unwords . fmap (LBS.toStrict . toLazyByteString . intDec . coerce) $ l_genes,
     BS.unwords . fmap LBS.toStrict $ l_irs
   )
@@ -250,24 +295,24 @@ writeFGenome rext g@(GLF (GenesIRs _ genes irs)) =
     irToBS l u = (toLazyByteString . intDec $ l) <> ":" <> (toLazyByteString . intDec $ u)
 
 flexibilize :: Int -> GenesIRsR -> GenesIRsF
-flexibilize l (GLR (GenesIRs sign genes irs)) = GLF $ GenesIRs sign genes irs'
+flexibilize l (GLR (GenesIRs sign genes irs new)) = GLF $ GenesIRs sign genes irs' new
   where
     irs' = (\i -> F (i - (l * i `div` 100)) (i + (l * i `div` 100))) . irToInt <$> irs
 
 instance RigidIntergenicGenome GenesIRsR where
-  intergenicFullReversal (GLR (GenesIRs sign vs vi)) = GLR $ GenesIRs sign vs' vi'
+  intergenicFullReversal (GLR (GenesIRs sign vs vi new)) = GLR $ GenesIRs sign vs' vi' new
     where
       vs' = case sign of { Unsigned -> id; Signed -> fmap negate } $ Vec.reverse vs
       vi' = Vec.reverse vi
 
-  intergenicReversal i j x y (GLR g@(GenesIRs sign vs vi)) =
+  intergenicReversal i j x y (GLR g@(GenesIRs sign vs vi new)) =
     assert (2 <= i)
       . assert (i < j)
       . assert (j <= coerce (size g) - 1)
       . assert (0 <= x && x <= ir_x)
       . assert (0 <= y && y <= ir_y)
       . GLR
-      $ GenesIRs sign vs' vi'
+      $ GenesIRs sign vs' vi' new
     where
       vs' = Vec.modify updateG vs
       vi' = Vec.modify updateIR vi
@@ -289,7 +334,7 @@ instance RigidIntergenicGenome GenesIRsR where
       ir_y = irToInt (vi ! (coerce j - 1))
       y_rest = ir_y - y
 
-  intergenicTransposition i j k x y z (GLR g@(GenesIRs sign vs vi)) =
+  intergenicTransposition i j k x y z (GLR g@(GenesIRs sign vs vi new)) =
     assert (2 <= i)
       . assert (i < j)
       . assert (j < k)
@@ -298,7 +343,7 @@ instance RigidIntergenicGenome GenesIRsR where
       . assert (0 <= y && y <= ir_y)
       . assert (0 <= z && z <= ir_z)
       . GLR
-      $ GenesIRs sign vs' vi'
+      $ GenesIRs sign vs' vi' new
     where
       vs' = Vec.modify updateG vs
       vi' = Vec.modify updateIR vi
@@ -327,13 +372,13 @@ instance RigidIntergenicGenome GenesIRsR where
       ir_z = irToInt (vi ! (coerce k - 2))
       z_rest = ir_z - z
 
-  intergenicDeletion i j x (GLR g@(GenesIRs sign vs vi)) =
+  intergenicDeletion i j x (GLR g@(GenesIRs sign vs vi new)) =
     assert (2 <= i)
       . assert (i < j)
       . assert (j <= coerce (size g))
       . assert (0 <= x && x <= ir_i + ir_j)
       . GLR
-      $ GenesIRs sign vs' vi'
+      $ GenesIRs sign vs' vi' new
     where
       vs' =
         Vec.slice 0 (coerce i - 1) vs
@@ -349,16 +394,17 @@ instance RigidIntergenicGenome GenesIRsR where
       ir_j = irToInt (vi ! (coerce j - 2))
 
   -- Genome to be inserted must be open (n genes and n+1 itergenic regions)
-  intergenicInsertion i (GLR (GenesIRs _ vsx vix)) (GLR g@(GenesIRs sign vs vi)) =
+  intergenicInsertion i (GLR (GenesIRs _ vsx vix _)) (GLR g@(GenesIRs sign vs vi new)) =
     assert (1 <= i)
       . assert (i <= coerce (size g - 1))
       . GLR
-      $ GenesIRs sign vs' vi'
+      $ GenesIRs sign vs' vi' new'
     where
       vs' =
         Vec.slice 0 (coerce i) vs
           Vec.++ vsx
           Vec.++ Vec.slice (coerce i) (Vec.length vs - coerce i) vs
+      new' = Vec.foldr (\gene n -> if abs gene >= n then abs gene + 1 else n) new vsx
       vi' =
         ( if i == 1
             then Vec.empty
@@ -383,27 +429,27 @@ data RigidFlexibleReverseMatcher g1 g2 = RFRM
 instance Matcher RigidRigidDirectMatcher GenesIRsR GenesIRsR where
   isMatch = isDirectMatch
   isDirectMatch _ g h = g == h
-  isReverseMatch _ g = isMatch RRDM (intergenicFullReversal g)
+  isReverseMatch _ _ _ = False
 
 instance Matcher RigidFlexibleDirectMatcher GenesIRsR GenesIRsF where
   isMatch = isDirectMatch
-  isDirectMatch RFDM (GLR (GenesIRs _ genesG irsG)) (GLF (GenesIRs _ genesH irsH)) =
+  isDirectMatch RFDM (GLR (GenesIRs _ genesG irsG _)) (GLF (GenesIRs _ genesH irsH _)) =
     genesG == genesH && and (Vec.zipWith check irsG irsH)
     where
       check :: IR -> IR -> Bool
       check (R ir) (F irl irr) = (irl <= ir) && (ir <= irr)
       check _ _ = error patternError
-  isReverseMatch _ g = isMatch RFDM (intergenicFullReversal g)
+  isReverseMatch _ _ _ = False
 
 instance Matcher RigidRigidReverseMatcher GenesIRsR GenesIRsR where
   isMatch RRRM g h = isDirectMatch RRRM g h || isReverseMatch RRRM g h
   isDirectMatch _ = isDirectMatch RRDM
-  isReverseMatch _ = isReverseMatch RRDM
+  isReverseMatch _ g = isDirectMatch RRDM (intergenicFullReversal g)
 
 instance Matcher RigidFlexibleReverseMatcher GenesIRsR GenesIRsF where
   isMatch RFRM g h = isDirectMatch RFRM g h || isReverseMatch RFRM g h
   isDirectMatch _ = isDirectMatch RFDM
-  isReverseMatch _ = isReverseMatch RFDM
+  isReverseMatch _ g = isDirectMatch RFDM (intergenicFullReversal g)
 
 randomGenome :: MonadRandom mon => Bool -> Int -> Int -> Sign -> mon GenesIRsR
 randomGenome zeros n lim signed = do
@@ -435,7 +481,7 @@ randomGenomeWithReplicas zeros n rep low high signed = do
     swaps b v = if b then v else invOri v
 
 shuffleGenome :: (MonadRandom mon) => GenesIRsR -> mon GenesIRsR
-shuffleGenome g@(GLR (GenesIRs sign ls_ li)) = do
+shuffleGenome g@(GLR (GenesIRs sign ls_ li _)) = do
   coins <- getRandoms
   let s = sum . fmap irToInt $ li
       ls = Vec.toList ls_

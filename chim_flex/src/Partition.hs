@@ -13,16 +13,20 @@ module Partition
     writePartition,
     getBlocksMatchGraph,
     longestSubstring,
+    commonPrefix,
+    suboptimalRuleInterval,
+    suboptimalRulePairs,
   )
 where
 
+import Control.Applicative ((<|>))
 import Data.Bits (Bits, complement, setBit, testBit, zeroBits)
 import Data.ByteString.Char8 qualified as BS
 import Data.Foldable (toList)
 import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
 import Data.List qualified as List
-import Data.Maybe (catMaybes, listToMaybe, mapMaybe, maybeToList, fromMaybe)
+import Data.Maybe (catMaybes, fromMaybe, listToMaybe, mapMaybe, maybeToList)
 import Genomes (Gene, GeneMap, GenesIRsF, GenesIRsR, Genome (..), Idx, IntergenicGenome (..), Matcher (..), RigidFlexibleReverseMatcher (..), decIdx, geneMapLookup, idxDist, idxToInt, incIdx, mkIdx, positionMap, writeFGenome, writeIR, writeRGenome)
 import LocalBase
 import Text.Printf (PrintfArg, printf)
@@ -41,7 +45,7 @@ instance Show (Partition GenesIRsR GenesIRsF) where
       getSub write g' i succi = write $ subGenome (incIdx i) succi g'
 
 getPartition :: GenesIRsR -> GenesIRsF -> Partition GenesIRsR GenesIRsF
-getPartition = greedyPart True RFRM
+getPartition = soarPartition RFRM
 
 writePartition :: Partition GenesIRsR GenesIRsF -> (BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString)
 writePartition (GenomePartition g h bg bh) = (genes_bs_g, irs_bs_g, genes_bs_h, irs_bs_h)
@@ -124,45 +128,53 @@ longestSubstring maybe_singleton matcher genesOnBlocksG genesOnBlocksH g h =
     -- returns the indices of the correspondent subgenomes in g and h (first and last gene)
     longestMatch ig = maxWith (uncurry idxDist . fst) $ do
       ih <- map mkIdx . filter (`IntSet.notMember` genesOnBlocksH) $ [1 .. size h]
-      maybeToList $ commonPrefix ig ih
+      maybeToList $ commonPrefix maybe_singleton matcher genesOnBlocksG genesOnBlocksH g h ig ih
 
-    commonPrefix :: Idx -> Idx -> Maybe ((Idx, Idx), (Idx, Idx))
-    -- find common prefix of subgenome of g starting with ig
-    -- and subgenome of h starting with ih
-    -- returns Nothing if the prefix is empty
-    -- returns indices for the ends of both subgenomes otherwise
-    commonPrefix ig ih = do
-      (endCPG, endCPH) <- (if getGene ig g /= getGene ih h then Nothing else Just $ commonPrefix' ig ig ih ih)
-      case maybe_singleton of
-        Just singleton ->
-          if singleton `isGene` subGenome ig endCPG g
-            then return ((ig, endCPG), (ih, endCPH))
-            else Nothing
-        Nothing -> return ((ig, endCPG), (ih, endCPH))
-
-    commonPrefix' :: Idx -> Idx -> Idx -> Idx -> (Idx, Idx)
-    commonPrefix' ig jg ih jh =
+commonPrefix :: (Matcher m g1 g2, Genome g1, Genome g2) => Maybe Gene -> m g1 g2 -> IntSet -> IntSet -> g1 -> g2 -> Idx -> Idx -> Maybe ((Idx, Idx), (Idx, Idx))
+-- find common prefix of subgenome of g starting with ig
+-- and subgenome of h starting with ih
+-- returns Nothing if the prefix is empty
+-- returns indices for the ends of both subgenomes otherwise
+commonPrefix maybe_singleton matcher genesOnBlocksG genesOnBlocksH g h ig ih = do
+  (endCPG, endCPH) <-
+    if
+        | isDirectMatch matcher (subGenome ig ig g) (subGenome ih ih h) -> Just $ commonPrefix' False ig ih
+        | isReverseMatch matcher (subGenome ig ig g) (subGenome ih ih h) -> Just $ commonPrefix' True ig ih
+        | otherwise -> Nothing
+  case maybe_singleton of
+    Just singleton ->
+      if singleton `isGene` subGenome ig endCPG g
+        then return ((ig, endCPG), (ih, endCPH))
+        else Nothing
+    Nothing -> return ((ig, endCPG), (ih, endCPH))
+  where
+    commonPrefix' :: Bool -> Idx -> Idx -> (Idx, Idx)
+    commonPrefix' rev jg jh =
       if
           | jg == mkIdx (size g) -> (jg, jh)
           | jh == mkIdx (size h) -> (jg, jh)
           | idxToInt jg' `IntSet.member` genesOnBlocksG -> (jg, jh)
           | idxToInt jh' `IntSet.member` genesOnBlocksH -> (jg, jh)
-          | not (isMatch matcher (subGenome jg jg' g) (subGenome jh jh' h)) -> (jg, jh)
-          | otherwise -> commonPrefix' ig jg' ih jh'
+          | not (testMatch matcher (subGenome jg jg' g) (subGenome jh jh' h)) -> (jg, jh)
+          | otherwise -> commonPrefix' rev jg' jh'
       where
         jg' = incIdx jg
         jh' = incIdx jh
+        testMatch = if rev then isReverseMatch else isDirectMatch
 
 combine :: Partition g1 g2 -> Partition g1 g2
 combine (GenomePartition g h bg bh) = undefined
 
 soarPartition :: (Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> g1 -> g2 -> Partition g1 g2
-soarPartition matcher g h = part -- combine part
+soarPartition matcher g_ h_ = part -- combine part
   where
+    (g, h) = uncurry (suboptimalRulePairs matcher) (suboptimalRuleInterval matcher g_ h_)
+    nG = size g
+    nH = size h
     part = GenomePartition g h (cleanList breaksG) (cleanList breaksH)
     cleanList = map head . List.group . List.sort
     graph = makePMGraph4 matcher g h
-    (breaksG, breaksH) = (`getBpsFromIS` graph) . independentSet $ graph
+    (breaksG, breaksH) = traceValue . (getBpsFromIS nG nH graph) . independentSet $ graph
 
 newtype BitMask = BM Integer deriving (Eq, Ord, Bits, PrintfArg)
 
@@ -183,6 +195,9 @@ type Edge = (Vertex, Vertex)
 type PairMatch g1 g2 = (g1, g2, Idx, Idx, Vertex)
 
 data PMGraph4 g1 g2 = PMGraph4 [Edge] [PairMatch g1 g2]
+
+instance (Show g1, Show g2) => Show (PMGraph4 g1 g2) where
+  show (PMGraph4 edges pairMatches) = show edges ++ "\n" ++ show pairMatches
 
 isConflict :: (Matcher m g1 g2) => m g1 g2 -> PairMatch g1 g2 -> PairMatch g1 g2 -> Bool
 isConflict matcher pm@(due1, due2, idx1, idx2, _) pm'@(_, _, idx1', idx2', _) =
@@ -222,10 +237,12 @@ instance PMGraph (PMGraph4 g1 g2) where
         | not (testBit onCover u) && not (testBit onCover v) = setBit (setBit onCover u) v
         | otherwise = onCover
 
-getBpsFromIS :: BitMask -> PMGraph4 g1 g2 -> ([Idx], [Idx])
-getBpsFromIS indSet (PMGraph4 _ pms) = (getBPS False, getBPS True)
+getBpsFromIS :: Int -> Int -> PMGraph4 g1 g2 -> BitMask -> ([Idx], [Idx])
+getBpsFromIS nG nH (PMGraph4 _ pms) indSet = (bpsG, bpsH)
   where
-    getBPS isSecond =
+    bpsG = [1 .. mkIdx nG] List.\\ getDues False
+    bpsH = [1 .. mkIdx nH] List.\\ getDues True
+    getDues isSecond =
       mapMaybe
         ( \(_, _, idx1, idx2, v) ->
             if testBit indSet v
@@ -236,12 +253,24 @@ getBpsFromIS indSet (PMGraph4 _ pms) = (getBPS False, getBPS True)
 
 -- | Match two correspondent intervals a^l...a^r from g and b^l...b^r from h.
 suboptimalRuleInterval :: (Matcher m g1 g2, Genome g1, Genome g2) => m g1 g2 -> g1 -> g2 -> (g1, g2)
-suboptimalRuleInterval matcher g h = head $ do
-  return (undefined, undefined)
+suboptimalRuleInterval matcher g h = foldr checkAndReplace (g, h) is_js
   where
     posMapG = positionMap g
     posMapH = positionMap h
     originallySingleton i = singletonOnBoth posMapG posMapH (getGene i g)
+
+    -- Check possible interval matches and replace than with singletons
+    checkAndReplace (i, j) (g', h') =
+      case checkDirMatch i j <|> checkRevMatch i j <|> checkMiddleMatch i j of
+        Nothing -> (g', h')
+        Just (al, ar, bl, br, isRev) ->
+          let (g'', singletons_g) = makeSingletons h [al + 1 .. ar - 1] g'
+              singletons_h =
+                if isRev
+                  then reverse . map (invGene g) $ singletons_g
+                  else singletons_g
+              h'' = setGenes [bl + 1 .. br - 1] singletons_h h'
+           in (g'', h'')
 
     -- candidates for indices of a^l in a^l...a^r
     is = filter originallySingleton [1 .. mkIdx (size g)]
@@ -255,43 +284,60 @@ suboptimalRuleInterval matcher g h = head $ do
         is
 
     -- check if the interval is a direct match (a^l...a^r = b^l...b^r) and
-    -- returns indices of (a^l,a^r,b^l,b^r)
+    -- returns indices of (a^l,a^r,b^l,b^r) and the value False indicating that
+    -- the match is not reverse.
     checkDirMatch i j = do
-      k <- listToMaybe k_result
-      return (i, i + k, j, j + k)
+      k <- k_result
+      if k > 1
+        then Just (i, i + k, j, j + k, False)
+        else Nothing
       where
         -- k is the displacement from a^l to a^r
         ks = [1 .. (min (mkIdx (size g) - i) (mkIdx (size h) - j))]
-        matches = map fst . takeWhile snd $ map (\k -> (k, isMatch matcher (subGenome (i + k - 1) (i + k) g) (subGenome (j + k - 1) (j + k) h))) ks
-        k_result = filter (\k -> k > 1 && originallySingleton (i + k)) matches
+        matches = map fst . takeWhile snd $ map (\k -> (k, isDirectMatch matcher (subGenome (i + k - 1) (i + k) g) (subGenome (j + k - 1) (j + k) h))) ks
+        k_result =
+          (\k -> if k > 1 then Just k else Nothing)
+            =<< List.find (\k -> originallySingleton (i + k)) matches
 
     -- check if the interval is a reverse match (a^l...a^r = -b^r...-b^l) and
-    -- returns indices of (a^l,a^r,b^l,b^r)
+    -- returns indices of (a^l,a^r,b^l,b^r) and the value True indicating that
+    -- the match is reverse.
     checkRevMatch i j = do
-      k <- listToMaybe k_result
-      return (i, i + k, j - k, j)
+      k <- k_result
+      if k > 1
+        then Just (i, i + k, j - k, j, True)
+        else Nothing
       where
         -- k is the displacement from a^l to a^r
         ks = [1 .. (min (mkIdx (size g) - i) (j - 1))]
-        matches = map fst . takeWhile snd $ map (\k -> (k, isMatch matcher (subGenome (i + k - 1) (i + k) g) (subGenome (j - k) (j - k + 1) h))) ks
-        k_result = filter (\k -> k > 1 && originallySingleton (i + k)) matches
+        matches = map fst . takeWhile snd $ map (\k -> (k, isReverseMatch matcher (subGenome (i + k - 1) (i + k) g) (subGenome (j - k) (j - k + 1) h))) ks
+        k_result =
+          (\k -> if k > 1 then Just k else Nothing)
+            =<< List.find (\k -> originallySingleton (i + k)) matches
 
     -- check if the middle is a reverse match
     -- (a^la^{l+1}...a^{r-1}a^r = b^l-b^{r-1}...-b^{l+1}b^r) and
-    -- returns indices of (a^l,a^r,b^l,b^r)
+    -- returns indices of (a^l,a^r,b^l,b^r) and the value True indicating that
+    -- the match is reverse.
     checkMiddleMatch i j = do
       idxAr <- getIdxAr
       k <- k_result idxAr
-      return (i, idxAr, j, j + k)
+      Just (i, idxAr, j, j + k, True)
       where
         getIdxAr = List.find originallySingleton [i + 1 .. mkIdx (size g)]
         -- k is the displacement from a^l to a^r
         ks idxAr = [2 .. idxAr - i - 1]
-        matches idxAr = map fst . takeWhile snd . map (\k -> (k, isMatch matcher (subGenome (idxAr - k) (idxAr - k + 1) g) (subGenome (j + k - 1) (j + k) h))) $ ks idxAr
+        matches idxAr = map fst . takeWhile snd . map (\k -> (k, isReverseMatch matcher (subGenome (idxAr - k) (idxAr - k + 1) g) (subGenome (j + k - 1) (j + k) h))) $ ks idxAr
         k_result idxAr =
           if idxAr - i > mkIdx (size h) - j
             || not
-              ( isMatch
+              ( isDirectMatch
+                  matcher
+                  (subGenome i i g)
+                  (subGenome j j h)
+              )
+            || not
+              ( isDirectMatch
                   matcher
                   (subGenome idxAr idxAr g)
                   (subGenome (j + idxAr - i) (j + idxAr - i) h)
@@ -299,6 +345,63 @@ suboptimalRuleInterval matcher g h = head $ do
             then Nothing
             else listToMaybe (matches idxAr)
 
--- | Match pair of a singleton and a replica. The replica in mapped into singleton.
-suboptimalRulePairs :: g1 -> g2 -> (g1, g2)
-suboptimalRulePairs g h = undefined
+-- | Match pair of a singleton and a replica (a^ha^t).
+
+--- The replica in mapped into a singleton.
+suboptimalRulePairs :: (Matcher m g1 g2, Genome g1, Genome g2) => m g1 g2 -> g1 -> g2 -> (g1, g2)
+suboptimalRulePairs matcher g h = foldr replaceWithSingletons (g, h) (match_ah ++ match_at)
+  where
+    posMapG = positionMap g
+    posMapH = positionMap h
+    originallySingleton i = singletonOnBoth posMapG posMapH (getGene i g)
+
+    -- replace replica of each matched pair with a singleton
+    replaceWithSingletons (a, b, isRev) (g', h') =
+      let (g'', singletons_g) = makeSingletons h [a] g'
+          singletons_h =
+            if isRev
+              then map (invGene g) singletons_g
+              else singletons_g
+          h'' = setGenes [b] singletons_h h'
+       in (g'', h'')
+
+    -- candidates for indices of singletons
+    is = filter originallySingleton [1 .. mkIdx (size g)]
+
+    -- a^h is a singleton in both genomes and a^t is a replica
+    is_ah = filter (\i -> i < mkIdx (size g) && testReplicaG (i + 1)) is
+
+    -- find indices from G and H that must be turn into singletons in this case
+    match_ah = mapMaybe (uncurry checkPair_ah) $ findInH is_ah
+
+    checkPair_ah i j =
+      if
+          | j < mkIdx (size h) && isDirectMatch matcher (subGenome i (i + 1) g) (subGenome j (j + 1) h) -> Just (i + 1, j + 1, False)
+          | j > 1 && isReverseMatch matcher (subGenome i (i + 1) g) (subGenome (j - 1) j h) -> Just (i + 1, j - 1, True)
+          | otherwise -> Nothing
+
+    -- a^t is a singleton in both genomes and a^h is a replica
+    is_at = filter (\i -> i > 1 && testReplicaG (i - 1)) is
+
+    -- find indices from G and H that must be turn into singletons in this case
+    match_at = mapMaybe (uncurry checkPair_at) $ findInH is_at
+
+    checkPair_at i j =
+      if
+          | j < mkIdx (size h) && isReverseMatch matcher (subGenome (i - 1) i g) (subGenome j (j + 1) h) -> Just (i - 1, j + 1, True)
+          | j > 1 && isDirectMatch matcher (subGenome (i - 1) i g) (subGenome (j - 1) j h) -> Just (i - 1, j - 1, False)
+          | otherwise -> Nothing
+
+    -- combine is with the correspondent indices in h
+    findInH =
+      map
+        ( \i -> case geneMapLookup (getGene i g) posMapH of
+            Just [j] -> (i, j)
+            _ -> error patternError
+        )
+
+    -- test if gene at position i is a replica in the genome g
+    testReplicaG i =
+      case geneMapLookup (getGene i g) posMapG of
+        Nothing -> False
+        Just pos -> length pos > 1
