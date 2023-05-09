@@ -171,8 +171,10 @@ soarPartition matcher g_ h_ = part -- combine part
     (g, h) = uncurry (suboptimalRulePairs matcher) (suboptimalRuleInterval matcher g_ h_)
     nG = size g
     nH = size h
-    part = GenomePartition g h (cleanList breaksG) (cleanList breaksH)
+    part = GenomePartition g h (cleanAndPad (size g) breaksG) (cleanAndPad (size h) breaksH)
+    cleanAndPad n = cleanList . padBPS n
     cleanList = map head . List.group . List.sort
+    padBPS n bps = (0) : bps ++ [mkIdx n]
     graph = makePMGraph4 matcher g h
     (breaksG, breaksH) = (getBpsFromIS nG nH graph) . independentSet $ graph
 
