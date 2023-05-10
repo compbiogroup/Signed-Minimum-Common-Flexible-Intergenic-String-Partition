@@ -3,17 +3,16 @@
 module PartitionCheck (tests) where
 
 import Control.Monad.Random (evalRandIO)
-import qualified Data.IntSet as IntSet
-import qualified Data.List as List
+import Data.IntSet qualified as IntSet
+import Data.List qualified as List
 import Data.Maybe (fromJust)
 import Genomes
-import GenomesCheck (genRGenome, rearrangeGenome)
+import GenomesCheck (GenomeWrapper (..), genGenome, genRGenome, rearrangeGenome)
 import Hedgehog
-import qualified Hedgehog.Gen as Gen
-import qualified Hedgehog.Range as Range
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
 import LocalBase
 import Partition
-import Partition (suboptimalRulePairs)
 
 prop_commonPrefixFromBothAreEqual :: Property
 prop_commonPrefixFromBothAreEqual =
@@ -62,6 +61,13 @@ suboptimalRuleTurnsReplicasIntoSingletons rule =
     assert $ sigH `List.isSubsequenceOf` sigH'
   where
     getSingletons k = List.sort $ foldr (\pos acc -> if length pos == 1 then head pos : acc else acc) [] (positionMap k)
+
+bpsToBlocksIsomorphism :: Property
+bpsToBlocksIsomorphism = property $ do
+  (GW g) <- forAll genGenome
+  k <- forAll $ Gen.int (Range.linear 1 (size g))
+  bps <- forAll . fmap (take k) . Gen.shuffle $ [0 .. mkIdx (size g)]
+  assert $ True
 
 tests :: IO Bool
 tests = checkSequential $$(discover)

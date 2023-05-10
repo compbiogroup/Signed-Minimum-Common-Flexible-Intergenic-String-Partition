@@ -9,6 +9,7 @@
 module Partition
   ( greedyPart,
     soarPartition,
+    combine,
     getPartition,
     writePartition,
     getBlocksMatchGraph,
@@ -27,6 +28,8 @@ import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
 import Data.List qualified as List
 import Data.Maybe (catMaybes, fromMaybe, listToMaybe, mapMaybe, maybeToList)
+import Data.Sequence (Seq (..), (><))
+import Data.Sequence qualified as Seq
 import Genomes (Gene, GeneMap, GenesIRsF, GenesIRsR, Genome (..), Idx, IntergenicGenome (..), Matcher (..), RigidFlexibleReverseMatcher (..), decIdx, geneMapLookup, idxDist, idxToInt, incIdx, mkIdx, positionMap, writeFGenome, writeIR, writeRGenome)
 import LocalBase
 import Text.Printf (PrintfArg, printf)
@@ -162,11 +165,82 @@ commonPrefix maybe_singleton matcher genesOnBlocksG genesOnBlocksH g h ig ih = d
         jh' = incIdx jh
         testMatch = if rev then isReverseMatch else isDirectMatch
 
-combine :: Partition g1 g2 -> Partition g1 g2
-combine (GenomePartition g h bg bh) = undefined
+data Block = Block
+  { b_beg :: Idx,
+    b_end :: Idx,
+    b_sing :: Bool
+  }
+  deriving (Show)
+  
+instance Eq Block where
+  b1 == b2 = (b_beg b1 == b_beg b2) && (b_end b1 == b_end b2)
+
+data CombineWhat = CombineSinSin | CombineSinRep | CombineRepRep
+
+bpsToBlocks :: (Genome g) => g -> [Idx] -> Seq Block
+bpsToBlocks g bps = Seq.fromList . zipWith (\a b -> Block (incIdx a) b (any testSingleton [incIdx a .. b])) bps $ tail bps
+  where
+    posMap = positionMap g
+    testSingleton i =
+      case geneMapLookup (getGene i g) posMap of
+        Nothing -> False
+        Just pos -> length pos == 1
+
+blocksToBps :: Seq Block -> [Idx]
+blocksToBps seq_bs = (decIdx . b_beg . head $ bs) : map (\(Block _ b _) -> b) bs
+  where bs = toList seq_bs
+
+combine :: (Matcher m g1 g2) => m g1 g2 -> Partition g1 g2 -> Partition g1 g2
+combine matcher (GenomePartition g h bg bh) = GenomePartition g h bg' bh'
+  where
+    (blo_g', blo_h') = combine_ CombineSinSin (blo_g, blo_h)
+    blo_g = bpsToBlocks g bg
+    blo_h = bpsToBlocks h bh
+    bg' = blocksToBps blo_g'
+    bh' = blocksToBps blo_h'
+
+    combine_ :: CombineWhat -> (Seq Block, Seq Block) -> (Seq Block, Seq Block)
+    combine_ what (bs1, bs2) =
+      let (bs1', bs2') = go1 (Empty, bs1, Empty, bs2)
+       in if bs1' /= bs1
+            then combine_ what (bs1', bs2')
+            else case what of
+              CombineSinSin -> combine_ CombineSinRep (bs1, bs2)
+              CombineSinRep -> combine_ CombineRepRep (bs1, bs2)
+              CombineRepRep -> (bs1, bs2)
+      where
+        -- We have to iterate through the elements of the two sequences,
+        -- during the iteration they are moved from the sequence on the right
+        -- to the one on the left.
+        -- If the sequences are empty we are done
+        go1 (Empty, Empty, Empty, Empty) = (Empty, Empty)
+        -- We need at least one more element in the first and second sequence to combine
+        go1 (pre, ba1 :<| Empty, Empty, blocks2) = (pre :|> ba1, blocks2)
+        go1 (pre1, ba1 :<| bb1 :<| suf1, pre2, ba2 :<| Empty) =
+          go1 (pre1 :|> ba1, bb1 :<| suf1, Empty, pre2 :|> ba2)
+        -- Now we try to combine
+        go1 (pre1, blocks1@(ba1 :<| bb1 :<| suf1), pre2, blocks2@(ba2 :<| bb2 :<| suf2))
+          -- test if the two blocks fall into the correct case. If not go to next block in sequence 1.
+          | not testReps = go1 (pre1 :|> ba1, bb1 :<| suf1, Empty, pre2 >< blocks2)
+          -- test if the block can be combined
+          | isMatch matcher g_b1' h_b2' = go1 (pre1, b1' :<| suf1, Empty, (pre2 :|> b2') >< suf2)
+          -- next block of sequence 2
+          | otherwise = go1 (pre1, blocks1, pre2 :|> ba2, bb2 :<| suf2)
+          where
+            testReps = case what of
+              CombineSinSin -> b_sing ba1 && b_sing bb1
+              CombineSinRep -> b_sing ba1 || b_sing bb1
+              CombineRepRep -> True
+
+            b1' = Block (b_beg ba1) (b_end bb1) (b_sing ba1 || b_sing bb1)
+            b2' = Block (b_beg ba2) (b_end bb2) (b_sing ba2 || b_sing bb2)
+            g_b1' = subGenome (b_beg b1') (b_end b1') g
+            h_b2' = subGenome (b_beg b2') (b_end b2') h
+
+        go1 (_, _, _, _) = error patternError
 
 soarPartition :: (Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> g1 -> g2 -> Partition g1 g2
-soarPartition matcher g_ h_ = part -- combine part
+soarPartition matcher g_ h_ = combine matcher part
   where
     (g, h) = uncurry (suboptimalRulePairs matcher) (suboptimalRuleInterval matcher g_ h_)
     nG = size g
@@ -176,7 +250,7 @@ soarPartition matcher g_ h_ = part -- combine part
     cleanList = map head . List.group . List.sort
     padBPS n bps = (0) : bps ++ [mkIdx n]
     graph = makePMGraph4 matcher g h
-    (breaksG, breaksH) = (getBpsFromIS nG nH graph) . independentSet $ graph
+    (breaksG, breaksH) = getBpsFromIS nG nH graph . independentSet $ graph
 
 newtype BitMask = BM Integer deriving (Eq, Ord, Bits, PrintfArg)
 

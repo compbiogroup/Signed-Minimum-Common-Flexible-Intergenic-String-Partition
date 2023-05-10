@@ -1,7 +1,7 @@
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module GenomesCheck (tests, genRGenome, rearrangeGenome) where
+module GenomesCheck (tests, genGenome, genRGenome, rearrangeGenome, GenomeWrapper (..)) where
 
 import Control.Monad.Random (MonadRandom, getRandomR, replicateM)
 import Genomes
