@@ -1,13 +1,14 @@
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE ImportQualifiedPost #-}
 
 module GenomesCheck (tests, genGenome, genRGenome, rearrangeGenome, GenomeWrapper (..)) where
 
 import Control.Monad.Random (MonadRandom, getRandomR, replicateM)
 import Genomes
 import Hedgehog
-import qualified Hedgehog.Gen as Gen
-import qualified Hedgehog.Range as Range
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
 import LocalBase
 
 genGene :: Gen Int
@@ -72,13 +73,15 @@ genFGenomeWithSign sign = do
 
 rearrangeGenome :: (MonadRandom mon, RigidIntergenicGenome g) => Int -> g -> mon g
 rearrangeGenome k g =
-  do
-    revs <- replicateM k rev
-    return $ foldr (\(i, j) g' -> intergenicReversal (mkIdx i) (mkIdx j) 0 0 g') g revs
+  if size g <= 4
+    then return g
+    else do
+      revs <- replicateM k rev
+      return $ foldr (\(i, j) g' -> intergenicReversal (mkIdx i) (mkIdx j) 0 0 g') g revs
   where
     rev = do
-      i <- getRandomR (2 :: Int, size g - 1)
-      j <- getRandomR (i, size g - 1)
+      i <- getRandomR (2 :: Int, size g - 2)
+      j <- getRandomR (i + 1, size g - 1)
       return (i, j)
 
 prop_getGeneIsGene :: Property

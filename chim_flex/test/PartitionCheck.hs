@@ -1,4 +1,5 @@
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE ImportQualifiedPost #-}
 
 module PartitionCheck (tests) where
 
@@ -62,12 +63,13 @@ suboptimalRuleTurnsReplicasIntoSingletons rule =
   where
     getSingletons k = List.sort $ foldr (\pos acc -> if length pos == 1 then head pos : acc else acc) [] (positionMap k)
 
-bpsToBlocksIsomorphism :: Property
-bpsToBlocksIsomorphism = property $ do
+prop_bpsToBlocksIsomorphism :: Property
+prop_bpsToBlocksIsomorphism = property $ do
   (GW g) <- forAll genGenome
-  k <- forAll $ Gen.int (Range.linear 1 (size g))
-  bps <- forAll . fmap (take k) . Gen.shuffle $ [0 .. mkIdx (size g)]
-  assert $ True
+  k <- forAll $ Gen.int (Range.linear 0 (size g - 2))
+  bps_ <- forAll . fmap (take k) . Gen.shuffle $ [1 .. mkIdx (size g - 1)]
+  let bps = (0) : bps_ ++ [mkIdx (size g)]
+  bps === (blocksToBps . bpsToBlocks g $ bps)
 
 tests :: IO Bool
 tests = checkSequential $$(discover)

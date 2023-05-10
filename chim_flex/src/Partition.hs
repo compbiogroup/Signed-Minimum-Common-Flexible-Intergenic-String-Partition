@@ -13,6 +13,8 @@ module Partition
     getPartition,
     writePartition,
     getBlocksMatchGraph,
+    blocksToBps,
+    bpsToBlocks,
     longestSubstring,
     commonPrefix,
     suboptimalRuleInterval,
@@ -171,7 +173,7 @@ data Block = Block
     b_sing :: Bool
   }
   deriving (Show)
-  
+
 instance Eq Block where
   b1 == b2 = (b_beg b1 == b_beg b2) && (b_end b1 == b_end b2)
 
@@ -188,7 +190,8 @@ bpsToBlocks g bps = Seq.fromList . zipWith (\a b -> Block (incIdx a) b (any test
 
 blocksToBps :: Seq Block -> [Idx]
 blocksToBps seq_bs = (decIdx . b_beg . head $ bs) : map (\(Block _ b _) -> b) bs
-  where bs = toList seq_bs
+  where
+    bs = toList seq_bs
 
 combine :: (Matcher m g1 g2) => m g1 g2 -> Partition g1 g2 -> Partition g1 g2
 combine matcher (GenomePartition g h bg bh) = GenomePartition g h bg' bh'
@@ -236,7 +239,6 @@ combine matcher (GenomePartition g h bg bh) = GenomePartition g h bg' bh'
             b2' = Block (b_beg ba2) (b_end bb2) (b_sing ba2 || b_sing bb2)
             g_b1' = subGenome (b_beg b1') (b_end b1') g
             h_b2' = subGenome (b_beg b2') (b_end b2') h
-
         go1 (_, _, _, _) = error patternError
 
 soarPartition :: (Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> g1 -> g2 -> Partition g1 g2
