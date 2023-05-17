@@ -19,6 +19,7 @@ module Partition
     commonPrefix,
     suboptimalRuleInterval,
     suboptimalRulePairs,
+    Partition,
   )
 where
 
@@ -41,7 +42,7 @@ type Breakpoint = [Idx]
 data Partition g1 g2 where
   GenomePartition :: (Genome g1, Genome g2) => g1 -> g2 -> Breakpoint -> Breakpoint -> Partition g1 g2
 
-instance Show (Partition GenesIRsR GenesIRsF) where
+instance (Show g1, Show g2) => Show (Partition g1 g2) where
   show (GenomePartition g h bg bh) = unlines [combiStr subs_g, combiStr subs_h]
     where
       combiStr strs = unwords $ interleavelists strs (replicate (length strs - 1) "|")
@@ -66,7 +67,8 @@ writePartition (GenomePartition g h bg bh) = (genes_bs_g, irs_bs_g, genes_bs_h, 
     bssh = zipWith (getSub (writeFGenome False) h) bh $ tail bh
     getSub write g' i succi = write $ subGenome (incIdx i) succi g'
 
-getBlocksMatchGraph :: RigidFlexibleReverseMatcher GenesIRsR GenesIRsF -> Partition GenesIRsR GenesIRsF -> [[Int]]
+-- Possible position in S of each block from P, indices starting in 0
+getBlocksMatchGraph :: (Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> Partition g1 g2 -> [[Int]]
 getBlocksMatchGraph macher (GenomePartition g h bg bh) =
   do
     sub_g <- zipWith (getSub g) bg $ tail bg
@@ -245,12 +247,15 @@ soarPartition :: (Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> g1 -> g2 
 soarPartition matcher g_ h_ = combine matcher part
   where
     (g, h) = uncurry (suboptimalRulePairs matcher) (suboptimalRuleInterval matcher g_ h_)
+    -- replace the previous line with this next one to disable the use of
+    -- the suboptimal rules
+    -- (g, h) = (g_, h_) 
     nG = size g
     nH = size h
     part = GenomePartition g h (cleanAndPad (size g) breaksG) (cleanAndPad (size h) breaksH)
     cleanAndPad n = cleanList . padBPS n
     cleanList = map head . List.group . List.sort
-    padBPS n bps = (0) : bps ++ [mkIdx n]
+    padBPS n bps = 0 : bps ++ [mkIdx n]
     graph = makePMGraph4 matcher g h
     (breaksG, breaksH) = getBpsFromIS nG nH graph . independentSet $ graph
 
@@ -339,13 +344,13 @@ suboptimalRuleInterval matcher g h = foldr checkAndReplace (g, h) is_js
 
     -- Check possible interval matches and replace than with singletons
     checkAndReplace (i, j) (g', h') =
-      case checkDirMatch i j <|> checkRevMatch i j <|> checkMiddleMatch i j of
+      case checkDirMatch i j g' h' <|> checkRevMatch i j g' h' <|> checkMiddleMatch i j g' h' of
         Nothing -> (g', h')
         Just (al, ar, bl, br, isRev) ->
-          let (g'', singletons_g) = makeSingletons h [al + 1 .. ar - 1] g'
+          let (g'', singletons_g) = makeSingletons h' [al + 1 .. ar - 1] g'
               singletons_h =
                 if isRev
-                  then reverse . map (invGene g) $ singletons_g
+                  then reverse . map (invGene g') $ singletons_g
                   else singletons_g
               h'' = setGenes [bl + 1 .. br - 1] singletons_h h'
            in (g'', h'')
@@ -364,15 +369,15 @@ suboptimalRuleInterval matcher g h = foldr checkAndReplace (g, h) is_js
     -- check if the interval is a direct match (a^l...a^r = b^l...b^r) and
     -- returns indices of (a^l,a^r,b^l,b^r) and the value False indicating that
     -- the match is not reverse.
-    checkDirMatch i j = do
+    checkDirMatch i j g' h' = do
       k <- k_result
       if k > 1
         then Just (i, i + k, j, j + k, False)
         else Nothing
       where
         -- k is the displacement from a^l to a^r
-        ks = [1 .. (min (mkIdx (size g) - i) (mkIdx (size h) - j))]
-        matches = map fst . takeWhile snd $ map (\k -> (k, isDirectMatch matcher (subGenome (i + k - 1) (i + k) g) (subGenome (j + k - 1) (j + k) h))) ks
+        ks = [1 .. (min (mkIdx (size g') - i) (mkIdx (size h') - j))]
+        matches = map fst . takeWhile snd $ map (\k -> (k, isDirectMatch matcher (subGenome (i + k - 1) (i + k) g') (subGenome (j + k - 1) (j + k) h'))) ks
         k_result =
           (\k -> if k > 1 then Just k else Nothing)
             =<< List.find (\k -> originallySingleton (i + k)) matches
@@ -380,15 +385,15 @@ suboptimalRuleInterval matcher g h = foldr checkAndReplace (g, h) is_js
     -- check if the interval is a reverse match (a^l...a^r = -b^r...-b^l) and
     -- returns indices of (a^l,a^r,b^l,b^r) and the value True indicating that
     -- the match is reverse.
-    checkRevMatch i j = do
+    checkRevMatch i j g' h' = do
       k <- k_result
       if k > 1
         then Just (i, i + k, j - k, j, True)
         else Nothing
       where
         -- k is the displacement from a^l to a^r
-        ks = [1 .. (min (mkIdx (size g) - i) (j - 1))]
-        matches = map fst . takeWhile snd $ map (\k -> (k, isReverseMatch matcher (subGenome (i + k - 1) (i + k) g) (subGenome (j - k) (j - k + 1) h))) ks
+        ks = [1 .. (min (mkIdx (size g') - i) (j - 1))]
+        matches = map fst . takeWhile snd $ map (\k -> (k, isReverseMatch matcher (subGenome (i + k - 1) (i + k) g') (subGenome (j - k) (j - k + 1) h'))) ks
         k_result =
           (\k -> if k > 1 then Just k else Nothing)
             =<< List.find (\k -> originallySingleton (i + k)) matches
@@ -397,51 +402,61 @@ suboptimalRuleInterval matcher g h = foldr checkAndReplace (g, h) is_js
     -- (a^la^{l+1}...a^{r-1}a^r = b^l-b^{r-1}...-b^{l+1}b^r) and
     -- returns indices of (a^l,a^r,b^l,b^r) and the value True indicating that
     -- the match is reverse.
-    checkMiddleMatch i j = do
-      idxAr <- getIdxAr
-      k <- k_result idxAr
-      Just (i, idxAr, j, j + k, True)
+    checkMiddleMatch i j g' h' = do
+      k <- listToMaybe $ mapMaybe k_result getIdxAr
+      Just (i, i + k, j, j + k, True)
       where
-        getIdxAr = List.find originallySingleton [i + 1 .. mkIdx (size g)]
+        getIdxAr = filter originallySingleton [i + 2 .. mkIdx (size g')]
         -- k is the displacement from a^l to a^r
         ks idxAr = [2 .. idxAr - i - 1]
-        matches idxAr = map fst . takeWhile snd . map (\k -> (k, isReverseMatch matcher (subGenome (idxAr - k) (idxAr - k + 1) g) (subGenome (j + k - 1) (j + k) h))) $ ks idxAr
+        matches idxAr = all (\k -> isReverseMatch matcher (subGenome (idxAr - k) (idxAr - k + 1) g') (subGenome (j + k - 1) (j + k) h')) $ ks idxAr
         k_result idxAr =
-          if idxAr - i > mkIdx (size h) - j
+          if idxAr - i > mkIdx (size h') - j
             || not
               ( isDirectMatch
                   matcher
-                  (subGenome i i g)
-                  (subGenome j j h)
+                  (subGenome i i g')
+                  (subGenome j j h')
               )
             || not
               ( isDirectMatch
                   matcher
-                  (subGenome idxAr idxAr g)
-                  (subGenome (j + idxAr - i) (j + idxAr - i) h)
+                  (subGenome idxAr idxAr g')
+                  (subGenome (j + idxAr - i) (j + idxAr - i) h')
               )
+            || idxAr - i == 2
+              && not
+                ( isReverseMatch
+                    matcher
+                    (subGenome (i + 1) (i + 1) g')
+                    (subGenome (j + 1) (j + 1) h')
+                )
+            || not (matches idxAr)
             then Nothing
-            else listToMaybe (matches idxAr)
+            else Just (idxAr - i)
 
 -- | Match pair of a singleton and a replica (a^ha^t).
 
 --- The replica in mapped into a singleton.
 suboptimalRulePairs :: (Matcher m g1 g2, Genome g1, Genome g2) => m g1 g2 -> g1 -> g2 -> (g1, g2)
-suboptimalRulePairs matcher g h = foldr replaceWithSingletons (g, h) (match_ah ++ match_at)
+suboptimalRulePairs matcher g h = foldr checkAndReplace (g, h) (match_ah ++ match_at)
   where
     posMapG = positionMap g
     posMapH = positionMap h
     originallySingleton i = singletonOnBoth posMapG posMapH (getGene i g)
 
     -- replace replica of each matched pair with a singleton
-    replaceWithSingletons (a, b, isRev) (g', h') =
-      let (g'', singletons_g) = makeSingletons h [a] g'
-          singletons_h =
-            if isRev
-              then map (invGene g) singletons_g
-              else singletons_g
-          h'' = setGenes [b] singletons_h h'
-       in (g'', h'')
+    checkAndReplace pairsToCheck (g', h') =
+      case pairsToCheck g' h' of
+        Nothing -> (g', h')
+        Just (a,b,isRev) ->
+          let (g'', singletons_g) = makeSingletons h' [a] g'
+              singletons_h =
+                if isRev
+                  then map (invGene g') singletons_g
+                  else singletons_g
+              h'' = setGenes [b] singletons_h h'
+           in (g'', h'')
 
     -- candidates for indices of singletons
     is = filter originallySingleton [1 .. mkIdx (size g)]
@@ -450,24 +465,24 @@ suboptimalRulePairs matcher g h = foldr replaceWithSingletons (g, h) (match_ah +
     is_ah = filter (\i -> i < mkIdx (size g) && testReplicaG (i + 1)) is
 
     -- find indices from G and H that must be turn into singletons in this case
-    match_ah = mapMaybe (uncurry checkPair_ah) $ findInH is_ah
+    match_ah = map (\(i,j) g' h' -> checkPair_ah g' h' i j) $ findInH is_ah
 
-    checkPair_ah i j =
+    checkPair_ah g' h' i j =
       if
-          | j < mkIdx (size h) && isDirectMatch matcher (subGenome i (i + 1) g) (subGenome j (j + 1) h) -> Just (i + 1, j + 1, False)
-          | j > 1 && isReverseMatch matcher (subGenome i (i + 1) g) (subGenome (j - 1) j h) -> Just (i + 1, j - 1, True)
+          | j < mkIdx (size h') && isDirectMatch matcher (subGenome i (i + 1) g') (subGenome j (j + 1) h') -> Just (i + 1, j + 1, False)
+          | j > 1 && isReverseMatch matcher (subGenome i (i + 1) g') (subGenome (j - 1) j h') -> Just (i + 1, j - 1, True)
           | otherwise -> Nothing
 
     -- a^t is a singleton in both genomes and a^h is a replica
     is_at = filter (\i -> i > 1 && testReplicaG (i - 1)) is
 
     -- find indices from G and H that must be turn into singletons in this case
-    match_at = mapMaybe (uncurry checkPair_at) $ findInH is_at
+    match_at = map (\(i,j) g' h' -> checkPair_at g' h' i j) $ findInH is_at
 
-    checkPair_at i j =
+    checkPair_at g' h' i j =
       if
-          | j < mkIdx (size h) && isReverseMatch matcher (subGenome (i - 1) i g) (subGenome j (j + 1) h) -> Just (i - 1, j + 1, True)
-          | j > 1 && isDirectMatch matcher (subGenome (i - 1) i g) (subGenome (j - 1) j h) -> Just (i - 1, j - 1, False)
+          | j < mkIdx (size h') && isReverseMatch matcher (subGenome (i - 1) i g') (subGenome j (j + 1) h') -> Just (i - 1, j + 1, True)
+          | j > 1 && isDirectMatch matcher (subGenome (i - 1) i g') (subGenome (j - 1) j h') -> Just (i - 1, j - 1, False)
           | otherwise -> Nothing
 
     -- combine is with the correspondent indices in h

@@ -1,10 +1,10 @@
 {-# LANGUAGE ExistentialQuantification #-}
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module GenomesCheck (tests, genGenome, genRGenome, rearrangeGenome, GenomeWrapper (..)) where
 
-import Control.Monad.Random (MonadRandom, getRandomR, replicateM)
+import Control.Monad.Random (MonadRandom, evalRandIO, getRandomR, replicateM)
 import Genomes
 import Hedgehog
 import Hedgehog.Gen qualified as Gen
@@ -71,8 +71,11 @@ genFGenomeWithSign sign = do
   where
     swaps b v = if b then v else -v
 
-rearrangeGenome :: (MonadRandom mon, RigidIntergenicGenome g) => Int -> g -> mon g
-rearrangeGenome k g =
+rearrangeGenome :: (RigidIntergenicGenome g) => Int -> g -> Gen g
+rearrangeGenome = applyReversals
+
+applyReversals :: (RigidIntergenicGenome g) => Int -> g -> Gen g
+applyReversals k g =
   if size g <= 4
     then return g
     else do
@@ -80,8 +83,8 @@ rearrangeGenome k g =
       return $ foldr (\(i, j) g' -> intergenicReversal (mkIdx i) (mkIdx j) 0 0 g') g revs
   where
     rev = do
-      i <- getRandomR (2 :: Int, size g - 2)
-      j <- getRandomR (i + 1, size g - 1)
+      i <- Gen.int (Range.linear (2 :: Int) (size g - 2))
+      j <- Gen.int (Range.linear (i + 1) (size g - 1))
       return (i, j)
 
 prop_getGeneIsGene :: Property
@@ -145,8 +148,15 @@ prop_newGeneIsNotGeneAfterMakeSingletons = property $ do
   (GW g) <- forAll genGenome
   k <- forAll $ Gen.int (Range.linear 1 (min 5 (size g - 2)))
   indices <- forAll $ take k <$> Gen.shuffle [2 .. mkIdx (size g - 1)]
-  let (g', genes) = makeSingletons g indices g
+  let (g', _) = makeSingletons g indices g
   assert $ not (getNewGene g' `isGene` g')
+
+prop_reversalsKeepBalanced :: Property
+prop_reversalsKeepBalanced = property $ do
+  g <- forAll genRGenome
+  k <- forAll $ Gen.int (Range.linear 0 (size g))
+  h <- forAll $ applyReversals k g
+  assert $ areBalanced RRRM g h
 
 tests :: IO Bool
 tests = checkSequential $$(discover)

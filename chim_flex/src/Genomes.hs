@@ -139,7 +139,9 @@ class Genome g where
   invGene :: g -> Gene -> Gene
 
   -- set genes at indices requires 1 < i < size g,
-  -- for each index i
+  -- for each index i.
+  -- The signs must be specify on the new genes,
+  -- because the original sings will be overwritten
   setGenes :: [Idx] -> [Gene] -> g -> g
 
   -- for indices i j, it gets the subgenome
@@ -189,10 +191,11 @@ occurrenceMax :: (Genome g) => g -> Int
 occurrenceMax = maximum . fmap length . positionMap
 
 instance Genome GenesIRs where
-  isGene gene (GenesIRs sign genes _ _) = gene `elem` genes || 
-    case sign of
-      Signed -> (-gene) `elem` genes
-      Unsigned -> False
+  isGene gene (GenesIRs sign genes _ _) =
+    gene `elem` genes
+      || case sign of
+        Signed -> (-gene) `elem` genes
+        Unsigned -> False
   size (GenesIRs _ genes _ _) = Vec.length genes
   getGene idx (GenesIRs _ genes _ _) = genes Vec.! (idxToInt idx - 1)
 
@@ -321,8 +324,7 @@ instance RigidIntergenicGenome GenesIRsR where
         mapM_ (\k -> MVec.swap v (coerce $ i + k - 1) (coerce $ j - k - 1)) [0 .. (j - i + 1) `div` 2 - 1]
         case sign of
           Unsigned -> pure ()
-          Signed -> mapM_ (MVec.modify v invOri . coerce) [i .. j]
-        mapM_ (MVec.modify v invOri . coerce) [i .. j]
+          Signed -> mapM_ (MVec.modify v invOri . coerce) [i-1 .. j-1]
 
       updateIR v = do
         mapM_ (\k -> MVec.swap v (coerce i + coerce k - 1) (coerce j - coerce k - 2)) [0 .. (j - i + 1) `div` 2 - 1]
@@ -417,6 +419,7 @@ class Matcher m g1 g2 where
   isMatch :: m g1 g2 -> g1 -> g2 -> Bool
   isDirectMatch :: m g1 g2 -> g1 -> g2 -> Bool
   isReverseMatch :: m g1 g2 -> g1 -> g2 -> Bool
+  areBalanced :: m g1 g2 -> g1 -> g2 -> Bool
 
 data RigidRigidDirectMatcher g1 g2 = RRDM
 
@@ -430,6 +433,9 @@ instance Matcher RigidRigidDirectMatcher GenesIRsR GenesIRsR where
   isMatch = isDirectMatch
   isDirectMatch _ g h = g == h
   isReverseMatch _ _ _ = False
+  areBalanced _ (GLR (GenesIRs _ genesG irsG _)) (GLR (GenesIRs _ genesH irsH _)) =
+    List.sort (fmap canonicOri (Vec.toList genesG)) == List.sort (fmap canonicOri (Vec.toList genesH))
+      && sum (fmap irToInt irsG) == sum (fmap irToInt irsH)
 
 instance Matcher RigidFlexibleDirectMatcher GenesIRsR GenesIRsF where
   isMatch = isDirectMatch
@@ -440,16 +446,29 @@ instance Matcher RigidFlexibleDirectMatcher GenesIRsR GenesIRsF where
       check (R ir) (F irl irr) = (irl <= ir) && (ir <= irr)
       check _ _ = error patternError
   isReverseMatch _ _ _ = False
+  areBalanced _ (GLR (GenesIRs _ genesG irsG _)) (GLF (GenesIRs _ genesH irsH _)) =
+    List.sort (fmap canonicOri (Vec.toList genesG)) == List.sort (fmap canonicOri (Vec.toList genesH))
+      && sum (fmap irToIntLow irsH) <= sum (fmap irToInt irsG)
+      && sum (fmap irToInt irsG) <= sum (fmap irToIntHigh irsH)
+    where
+      irToIntLow ir = case ir of
+        R _ -> error patternError
+        F l _ -> l
+      irToIntHigh ir = case ir of
+        R _ -> error patternError
+        F _ r -> r
 
 instance Matcher RigidRigidReverseMatcher GenesIRsR GenesIRsR where
   isMatch RRRM g h = isDirectMatch RRRM g h || isReverseMatch RRRM g h
   isDirectMatch _ = isDirectMatch RRDM
   isReverseMatch _ g = isDirectMatch RRDM (intergenicFullReversal g)
+  areBalanced _ = areBalanced RRDM
 
 instance Matcher RigidFlexibleReverseMatcher GenesIRsR GenesIRsF where
   isMatch RFRM g h = isDirectMatch RFRM g h || isReverseMatch RFRM g h
   isDirectMatch _ = isDirectMatch RFDM
   isReverseMatch _ g = isDirectMatch RFDM (intergenicFullReversal g)
+  areBalanced _ = areBalanced RFDM
 
 randomGenome :: MonadRandom mon => Bool -> Int -> Int -> Sign -> mon GenesIRsR
 randomGenome zeros n lim signed = do
