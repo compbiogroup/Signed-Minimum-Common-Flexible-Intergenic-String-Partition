@@ -12,7 +12,6 @@ import Data.ByteString.Char8 qualified as BS
 import Data.List (unfoldr)
 import Data.Set qualified as Set
 import Genomes
-import LocalBase
 import Options.Applicative
 
 opts :: ParserInfo Args

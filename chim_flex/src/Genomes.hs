@@ -28,6 +28,7 @@ module Genomes
     geneMapLookup,
     geneMapAdjust,
     occurrenceMax,
+    singletonOnBoth,
     GenesIRsR,
     GenesIRsF,
     mkRGenome,
@@ -189,6 +190,12 @@ geneMapAdjust f a (GM gm) = GM $ IntMap.adjust f (geneToInt $ abs a) gm
 
 occurrenceMax :: (Genome g) => g -> Int
 occurrenceMax = maximum . fmap length . positionMap
+
+singletonOnBoth :: GeneMap [Idx] -> GeneMap [Idx] -> Gene -> Bool
+singletonOnBoth posMapG posMapH gene =
+  (case geneMapLookup gene posMapG of Nothing -> False; Just pos -> length pos == 1)
+    && (case geneMapLookup gene posMapH of Nothing -> False; Just pos -> length pos == 1)
+
 
 instance Genome GenesIRs where
   isGene gene (GenesIRs sign genes _ _) =

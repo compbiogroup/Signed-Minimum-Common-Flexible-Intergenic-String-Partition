@@ -16,11 +16,12 @@ import Data.ByteString.Builder (intDec, toLazyByteString)
 import Data.ByteString.Char8 qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Time (diffUTCTime, getCurrentTime)
-import Genomes (RigidFlexibleReverseMatcher (..), Sign (..), readFGenome, readRGenome)
+import Genomes (RigidFlexibleReverseMatcher (..), Sign (..), readFGenome, readRGenome, GenesIRsR, GenesIRsF)
 import LocalBase
 import Options.Applicative
-import Partition (getBlocksMatchGraph, getPartition, writePartition)
+import Partition (getBlocksMatchGraph, writePartition, CommonPartition)
 import Text.Printf (printf)
+import PSOAR (soarPartition)
 
 data Args = Args
   { input :: String,
@@ -100,3 +101,6 @@ produceBlockMatch sign (s1, i1, s2, i2) = (s1', i1', s2', i2', bmg)
 
 writeBlocksMatchGraph :: [[Int]] -> BS.ByteString
 writeBlocksMatchGraph = BS.unwords . (\l -> interleavelists l (replicate (length l - 1) "|")) . map (BS.unwords . map (LBS.toStrict . toLazyByteString . intDec))
+
+getPartition :: GenesIRsR -> GenesIRsF -> CommonPartition GenesIRsR GenesIRsF
+getPartition = soarPartition RFRM

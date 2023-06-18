@@ -34,6 +34,7 @@ dependencies:
 - time
 - optparse-applicative
 - bytestring
+- enummapset
 
 ghc-options:
 - -Wall

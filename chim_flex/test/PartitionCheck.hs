@@ -4,10 +4,10 @@
 
 module PartitionCheck (tests) where
 
-import Control.Monad.Random (evalRandIO)
 import Data.Foldable (foldrM)
 import Data.IntMap qualified as IntMap
 import Data.IntSet qualified as IntSet
+import Data.EnumSet qualified as EnumSet
 import Data.List qualified as List
 import Data.Maybe (fromJust, isJust)
 import Genomes
@@ -15,8 +15,10 @@ import GenomesCheck (GenomeWrapper (..), genGenome, genRGenome, rearrangeGenome)
 import Hedgehog
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
-import LocalBase
 import Partition
+import PSOAR
+import PGreedy
+import PApprox
 
 prop_commonPrefixFromBothAreEqual :: Property
 prop_commonPrefixFromBothAreEqual =
@@ -26,7 +28,7 @@ prop_commonPrefixFromBothAreEqual =
     h <- forAll $ rearrangeGenome k g
     idx_g <- mkIdx <$> forAll (Gen.int (Range.linear 1 (size g)))
     idx_h <- forAll . fmap head . Gen.shuffle . fromJust $ geneMapLookup (getGene idx_g g) (positionMap h)
-    let ((g_beg, g_end), (h_beg, h_end)) = fromJust $ commonPrefix Nothing RRRM IntSet.empty IntSet.empty g h idx_g idx_h
+    let ((g_beg, g_end), (h_beg, h_end)) = fromJust $ commonPrefix Nothing RRRM EnumSet.empty EnumSet.empty g h idx_g idx_h
     subG <- forAll . return $ subGenome g_beg g_end g
     subH <- forAll . return $ subGenome h_beg h_end h
     assert $ isMatch RRRM subG subH
@@ -37,7 +39,7 @@ prop_longestSubstringFromBothAreEqual =
     g <- forAll genRGenome
     k <- forAll $ Gen.int (Range.linear 0 (size g))
     h <- forAll $ rearrangeGenome k g
-    let (((g_beg, g_end), (h_beg, h_end)), _, _) = fromJust $ longestSubstring Nothing RRRM IntSet.empty IntSet.empty g h
+    let (((g_beg, g_end), (h_beg, h_end)), _, _) = fromJust $ longestSubstring Nothing RRRM EnumSet.empty EnumSet.empty g h
     let subG = subGenome g_beg g_end g
         subH = subGenome h_beg h_end h
     assert $ isMatch RRRM subG subH
@@ -79,13 +81,13 @@ suboptimalRuleKeepBalancedGenomes rule =
     (g', h') <- forAll . return $ rule RRRM g h
     assert $ areBalanced RRRM g' h'
 
-prop_bpsToBlocksIsomorphism :: Property
-prop_bpsToBlocksIsomorphism = property $ do
+prop_bpsToBlockDelsIsomorphism :: Property
+prop_bpsToBlockDelsIsomorphism = property $ do
   (GW g) <- forAll genGenome
   k <- forAll $ Gen.int (Range.linear 0 (size g - 2))
   bps_ <- forAll . fmap (take k) . Gen.shuffle $ [1 .. mkIdx (size g - 1)]
-  let bps = (0) : bps_ ++ [mkIdx (size g)]
-  bps === (blocksToBps . bpsToBlocks g $ bps)
+  let bps = EnumSet.fromList bps_
+  bps === (blockDelsToBps . bpsToBlockDels g $ bps)
 
 prop_greedyPartitionProduceValidCorrespondence :: Property
 prop_greedyPartitionProduceValidCorrespondence =
@@ -99,7 +101,11 @@ prop_soarPartitionProduceValidCorrespondence :: Property
 prop_soarPartitionProduceValidCorrespondence =
   partitionProduceValidCorrespondence soarPartition
 
-partitionProduceValidCorrespondence :: (RigidRigidReverseMatcher GenesIRsR GenesIRsR -> GenesIRsR -> GenesIRsR -> Partition GenesIRsR GenesIRsR) -> Property
+prop_approxPartitionProduceValidCorrespondence :: Property
+prop_approxPartitionProduceValidCorrespondence =
+  partitionProduceValidCorrespondence approxPartition
+
+partitionProduceValidCorrespondence :: (RigidRigidReverseMatcher GenesIRsR GenesIRsR -> GenesIRsR -> GenesIRsR -> CommonPartition GenesIRsR GenesIRsR) -> Property
 partitionProduceValidCorrespondence partAlg =
   property $ do
     g <- forAll genRGenome

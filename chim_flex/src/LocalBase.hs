@@ -7,6 +7,7 @@ import qualified Data.HashSet as HashSet
 import qualified Data.List as List
 import Data.Hashable (Hashable)
 import Debug.Trace (trace)
+import Data.List (sortBy)
 
 newtype Dist = Dist Int deriving newtype (Eq, Show, Read)
 
@@ -71,3 +72,7 @@ maxWith f l =
   if null l
     then Nothing
     else Just $ List.maximumBy (\x y -> compare (f x) (f y)) l
+      
+sortWith :: Ord b => (a -> b) -> [a] -> [a]
+-- sort list converting values with function
+sortWith f = sortBy (\x y -> compare (f x) (f y))
