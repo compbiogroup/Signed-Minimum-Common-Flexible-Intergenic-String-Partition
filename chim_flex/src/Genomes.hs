@@ -5,6 +5,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module Genomes
   ( Genome (..),
@@ -80,7 +81,7 @@ mkGene = Gene
 geneToInt :: Gene -> Int
 geneToInt (Gene i) = i
 
-data IR = R Int | F Int Int deriving (Eq)
+data IR = R Int | F Int Int deriving (Eq, Ord)
 
 irToInt :: IR -> Int
 irToInt ir = case ir of
@@ -165,10 +166,10 @@ class Genome g where
   makeSingletons :: (Genome g2) => g2 -> [Idx] -> g -> (g, [Gene])
 
 class (Genome g) => IntergenicGenome g where
+  intergenicFullReversal :: g -> g
   getIR :: Idx -> g -> IR
 
 class (Genome g) => RigidIntergenicGenome g where
-  intergenicFullReversal :: g -> g
   intergenicReversal :: Idx -> Idx -> Int -> Int -> g -> g
   intergenicTransposition :: Idx -> Idx -> Idx -> Int -> Int -> Int -> g -> g
   intergenicInsertion :: Idx -> g -> g -> g
@@ -195,7 +196,6 @@ singletonOnBoth :: GeneMap [Idx] -> GeneMap [Idx] -> Gene -> Bool
 singletonOnBoth posMapG posMapH gene =
   (case geneMapLookup gene posMapG of Nothing -> False; Just pos -> length pos == 1)
     && (case geneMapLookup gene posMapH of Nothing -> False; Just pos -> length pos == 1)
-
 
 instance Genome GenesIRs where
   isGene gene (GenesIRs sign genes _ _) =
@@ -235,10 +235,19 @@ instance Genome GenesIRs where
 
 instance IntergenicGenome GenesIRs where
   getIR idx (GenesIRs _ _ irs _) = irs Vec.! (idxToInt idx - 1)
+  intergenicFullReversal (GenesIRs sign vs vi new) = GenesIRs sign vs' vi' new
+    where
+      vs' = case sign of { Unsigned -> id; Signed -> fmap negate } $ Vec.reverse vs
+      vi' = Vec.reverse vi
 
-newtype GenesIRsR = GLR GenesIRs deriving newtype (Show, Genome, IntergenicGenome)
+instance Orientable GenesIRs where
+  getOri g@(GenesIRs _ genes irs _) = if (genes,irs) <= (genes',irs') then LR else RL
+    where (GenesIRs _ genes' irs' _) = invOri g
+  invOri = intergenicFullReversal
 
-newtype GenesIRsF = GLF GenesIRs deriving newtype (Show, Genome, IntergenicGenome)
+newtype GenesIRsR = GLR GenesIRs deriving newtype (Show, Genome, IntergenicGenome, Orientable)
+
+newtype GenesIRsF = GLF GenesIRs deriving newtype (Show, Genome, IntergenicGenome, Orientable)
 
 instance Eq GenesIRsR where
   (GLR (GenesIRs sign1 genes1 irs1 _)) == (GLR (GenesIRs sign2 genes2 irs2 _)) =
@@ -292,7 +301,7 @@ readFGenome extend sign bs_genes bs_irs = mkFGenome extend sign genes irs
     readF fir =
       case BS.splitWith (== ':') fir of
         [lir, uir] -> (readInt lir, readInt uir)
-        _ -> error patternError
+        _ -> error inputError
 
 writeFGenome :: Bool -> GenesIRsF -> (BS.ByteString, BS.ByteString)
 writeFGenome rext g@(GLF (GenesIRs _ genes irs _)) =
@@ -310,11 +319,6 @@ flexibilize l (GLR (GenesIRs sign genes irs new)) = GLF $ GenesIRs sign genes ir
     irs' = (\i -> F (i - (l * i `div` 100)) (i + (l * i `div` 100))) . irToInt <$> irs
 
 instance RigidIntergenicGenome GenesIRsR where
-  intergenicFullReversal (GLR (GenesIRs sign vs vi new)) = GLR $ GenesIRs sign vs' vi' new
-    where
-      vs' = case sign of { Unsigned -> id; Signed -> fmap negate } $ Vec.reverse vs
-      vi' = Vec.reverse vi
-
   intergenicReversal i j x y (GLR g@(GenesIRs sign vs vi new)) =
     assert (2 <= i)
       . assert (i < j)
@@ -331,7 +335,7 @@ instance RigidIntergenicGenome GenesIRsR where
         mapM_ (\k -> MVec.swap v (coerce $ i + k - 1) (coerce $ j - k - 1)) [0 .. (j - i + 1) `div` 2 - 1]
         case sign of
           Unsigned -> pure ()
-          Signed -> mapM_ (MVec.modify v invOri . coerce) [i-1 .. j-1]
+          Signed -> mapM_ (MVec.modify v invOri . coerce) [i - 1 .. j - 1]
 
       updateIR v = do
         mapM_ (\k -> MVec.swap v (coerce i + coerce k - 1) (coerce j - coerce k - 2)) [0 .. (j - i + 1) `div` 2 - 1]

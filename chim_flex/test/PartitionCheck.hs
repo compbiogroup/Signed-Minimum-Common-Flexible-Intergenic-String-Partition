@@ -19,6 +19,7 @@ import Partition
 import PSOAR
 import PGreedy
 import PApprox
+import LocalBase
 
 prop_commonPrefixFromBothAreEqual :: Property
 prop_commonPrefixFromBothAreEqual =
@@ -89,6 +90,14 @@ prop_bpsToBlockDelsIsomorphism = property $ do
   let bps = EnumSet.fromList bps_
   bps === (blockDelsToBps . bpsToBlockDels g $ bps)
 
+prop_equalGenomesHaveOnlyPerfectComponetsOnBMG :: Property
+prop_equalGenomesHaveOnlyPerfectComponetsOnBMG =
+  property $ do
+    g <- forAll genRGenome
+    let pg = trivialPartition g
+    let (comps, _) = getConnectedComponents (mkBlockMatchGraph RRRM pg pg)
+    assert $ countPerfect comps == IntMap.size comps
+
 prop_greedyPartitionProduceValidCorrespondence :: Property
 prop_greedyPartitionProduceValidCorrespondence =
   partitionProduceValidCorrespondence (greedyPart False)
@@ -113,7 +122,7 @@ partitionProduceValidCorrespondence partAlg =
     h <- forAll $ rearrangeGenome k g
     part <- forAll . return $ partAlg RRRM g h
     partCombi <- forAll . return $ combine RRRM part
-    let block_graph = getBlocksMatchGraph RRRM $ partCombi
+    let block_graph = getBlocksMatchGraph RRRM partCombi
     assert $ testCorrespondence IntMap.empty block_graph
   where
     testCorrespondence bFromS_ bg =
@@ -141,6 +150,7 @@ partitionProduceValidCorrespondence partAlg =
 
 tests :: IO Bool
 tests = checkSequential $$(discover)
+-- tests = check prop_approxPartitionProduceValidCorrespondence
 -- tests = do
-  -- recheck (Size 84) (Seed 6955036737314309032 17918485724690255617) prop_suboptimalRulePairsKeepBalancedGenomes
+  -- recheck (Size 0) (Seed 12439291806607096571 15074968846026035773) prop_equalGenomesHaveOnlyPerfectComponetsOnBMG
   -- return True

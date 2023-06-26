@@ -41,6 +41,10 @@ patternError :: String
 -- ^ ERROR message to impossible pattern.
 patternError = "ERROR: Pattern shouldn't be possible."
 
+inputError :: String
+-- ^ ERROR message to incorrect input.
+inputError = "ERROR: Input is invalid."
+
 traceValue :: (Show a) => a -> a
 -- ^ trace for debug
 traceValue = traceValueS ""
