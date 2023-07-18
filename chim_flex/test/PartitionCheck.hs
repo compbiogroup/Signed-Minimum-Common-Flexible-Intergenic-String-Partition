@@ -20,6 +20,7 @@ import PSOAR
 import PGreedy
 import PApprox
 import LocalBase
+import Partition (checkCommon)
 
 prop_commonPrefixFromBothAreEqual :: Property
 prop_commonPrefixFromBothAreEqual =
@@ -122,31 +123,7 @@ partitionProduceValidCorrespondence partAlg =
     h <- forAll $ rearrangeGenome k g
     part <- forAll . return $ partAlg RRRM g h
     partCombi <- forAll . return $ combine RRRM part
-    let block_graph = getBlocksMatchGraph RRRM partCombi
-    assert $ testCorrespondence IntMap.empty block_graph
-  where
-    testCorrespondence bFromS_ bg =
-      isJust $ foldrM (select_block IntSet.empty) bFromS_ (zip [0 ..] bg)
-      where
-        -- select the S block to receive each P block
-        select_block _ (_, []) _ = Nothing
-        select_block seen (i, j : js) bFromS =
-          let seen' = IntSet.insert j seen
-              (bFromS', found) =
-                if
-                    | j `IntSet.member` seen -> (bFromS, False)
-                    | j `IntMap.member` bFromS ->
-                        let i' = bFromS IntMap.! j
-                         in case select_block
-                              seen'
-                              (i', bg !! i')
-                              bFromS of
-                              Nothing -> (bFromS, False)
-                              Just bFromS'' -> (bFromS'', True)
-                    | otherwise -> (bFromS, True)
-           in if found
-                then Just $ IntMap.insert j i bFromS'
-                else select_block seen' (i, js) bFromS 
+    assert $ checkCommon RRRM partCombi
 
 tests :: IO Bool
 tests = checkSequential $$(discover)

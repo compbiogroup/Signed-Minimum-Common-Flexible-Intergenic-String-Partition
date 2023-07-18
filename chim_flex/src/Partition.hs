@@ -2,11 +2,12 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Partition
   ( writePartition,
-    getBlocksMatchGraph,
+    getBlocksCorrespondence,
     trivialPartition,
     Partition,
     Breakpoints,
@@ -14,6 +15,7 @@ module Partition
     underlineGenome,
     breakpoints,
     blocks,
+    checkCommon,
     CommonPartition,
     mkCommonPartition,
     mkCommonPartition2,
@@ -23,12 +25,17 @@ module Partition
   )
 where
 
+import Control.Exception (assert)
+import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS
 import Data.EnumSet (EnumSet)
 import Data.EnumSet qualified as EnumSet
-import Data.Foldable (toList)
+import Data.Foldable (foldrM, toList)
+import Data.Map qualified as Map
+import Data.Maybe (isJust)
 import Data.Sequence (Seq (Empty, (:<|), (:|>)), (><))
 import Data.Sequence qualified as Seq
+import Data.Set qualified as Set
 import Genomes (GenesIRsF, GenesIRsR, Genome (..), IR, Idx, IntergenicGenome (..), Matcher (..), geneMapLookup, incIdx, mkIdx, positionMap, writeFGenome, writeIR, writeRGenome)
 import LocalBase
 
@@ -63,11 +70,47 @@ blocks pg@(GP g _) = zipWith (\i succi -> subGenome (incIdx i) succi g) bg $ tai
 data CommonPartition g1 g2 where
   CGP :: (Genome g1, Genome g2) => Partition g1 -> Partition g2 -> CommonPartition g1 g2
 
-mkCommonPartition :: (Genome g1, Genome g2) => Partition g1 -> Partition g2 -> CommonPartition g1 g2
-mkCommonPartition = CGP
+mkCommonPartition :: (Matcher m g1 g2, Genome g1, Genome g2) => m g1 g2 -> Partition g1 -> Partition g2 -> CommonPartition g1 g2
+mkCommonPartition matcher pg ph = assert (checkCommon_ matcher pg ph) $ CGP pg ph
 
-mkCommonPartition2 :: (Genome g1, Genome g2) => g1 -> Breakpoints -> g2 -> Breakpoints -> CommonPartition g1 g2
-mkCommonPartition2 g bg h bh = mkCommonPartition (mkPartition g bg) (mkPartition h bh)
+-- Verify if the the elements of pg can be assign to elements of ph with a perfect
+-- match.
+checkCommon :: (Matcher m g1 g2) => m g1 g2 -> CommonPartition g1 g2 -> Bool
+checkCommon matcher (CGP pg ph) = checkCommon_ matcher pg ph
+
+checkCommon_ :: (Matcher m g1 g2) => m g1 g2 -> Partition g1 -> Partition g2 -> Bool
+checkCommon_ matcher pg ph = isJust $ testPerfectMatch cors [0 .. length cors - 1]
+  where
+    cors = getBlocksCorrespondence_ matcher pg ph
+    testPerfectMatch aux_corres = foldrM (selectBlock Set.empty) Map.empty
+      where
+        -- Select block from G that corresponds to block represented by v.
+        -- fixCorres saves a map between blocks of G and their fix correspondent
+        -- in H.
+        selectBlock seen v fixCorres =
+          if done then Just fixCorres' else Nothing
+          where
+            (_, fixCorres', done) = selectBlock' seen v fixCorres
+
+        selectBlock' seen v = testCandidates v cands seen
+          where
+            cands = aux_corres !! v
+
+        testCandidates _ [] seen fixCorres = (seen, fixCorres, False)
+        testCandidates v (u : us) seen fixCorres =
+          if
+              | u `Set.member` seen -> testCandidates v us seen fixCorres
+              | u `Map.notMember` fixCorres -> (seen', fixCorres', True)
+              | done -> (seen_rec, blocksFromG_rec', True)
+              | otherwise -> testCandidates v us seen_rec blocksFromG_rec
+          where
+            seen' = Set.insert u seen
+            fixCorres' = Map.insert u v fixCorres
+            (seen_rec, blocksFromG_rec, done) = selectBlock' seen' (fixCorres Map.! u) fixCorres
+            blocksFromG_rec' = Map.insert u v blocksFromG_rec
+
+mkCommonPartition2 :: (Matcher m g1 g2, Genome g1, Genome g2) => m g1 g2 -> g1 -> Breakpoints -> g2 -> Breakpoints -> CommonPartition g1 g2
+mkCommonPartition2 matcher g bg h bh = mkCommonPartition matcher (mkPartition g bg) (mkPartition h bh)
 
 instance (Show g) => Show (Partition g) where
   show pg = combiStr subs_g
@@ -92,12 +135,16 @@ writePartition (CGP pg ph) = (genes_bs_g, irs_bs_g, genes_bs_h, irs_bs_h)
     bssh = map (writeFGenome False) . blocks $ ph
 
 -- Possible position in S of each block from P, indices starting in 0
-getBlocksMatchGraph :: (Matcher m g1 g2) => m g1 g2 -> CommonPartition g1 g2 -> [[Int]]
-getBlocksMatchGraph macher (CGP pg ph) =
+getBlocksCorrespondence :: (Matcher m g1 g2) => m g1 g2 -> CommonPartition g1 g2 -> [[Int]]
+getBlocksCorrespondence matcher (CGP pg ph) = getBlocksCorrespondence_ matcher pg ph
+
+-- Possible position in S of each block from P, indices starting in 0
+getBlocksCorrespondence_ :: (Matcher m g1 g2) => m g1 g2 -> Partition g1 -> Partition g2 -> [[Int]]
+getBlocksCorrespondence_ matcher pg ph =
   do
     sub_g <- blocks pg
     let sub_hs = blocks ph
-    return . map fst . filter (isMatch macher sub_g . snd) . zip [0 ..] $ sub_hs
+    return . map fst . filter (isMatch matcher sub_g . snd) . zip [0 ..] $ sub_hs
 
 data BlockDel = BlockDel
   { b_beg :: Idx,
@@ -127,7 +174,7 @@ blockDelsToBps seq_bs = EnumSet.fromList . init $ map (\(BlockDel _ b _) -> b) b
     bs = toList seq_bs
 
 combine :: (Matcher m g1 g2) => m g1 g2 -> CommonPartition g1 g2 -> CommonPartition g1 g2
-combine matcher (CGP (GP g bg) (GP h bh)) = CGP (GP g bg') (GP h bh')
+combine matcher (CGP (GP g bg) (GP h bh)) = mkCommonPartition2 matcher g bg' h bh'
   where
     (blo_g', blo_h') = combine_ CombineSinSin (blo_g, blo_h)
     blo_g = bpsToBlockDels g bg
@@ -148,7 +195,7 @@ combine matcher (CGP (GP g bg) (GP h bh)) = CGP (GP g bg') (GP h bh')
         -- We have to iterate through the elements of the two sequences,
         -- during the iteration they are moved from the sequence on the right
         -- to the one on the left.
-        -- If the sequences are empty we are done
+        -- If the sequences are empty there is nothing to do
         go1 (Empty, Empty, Empty, Empty) = (Empty, Empty)
         -- We need at least one more element in the first and second sequence to combine
         go1 (pre, ba1 :<| Empty, Empty, blocks2) = (pre :|> ba1, blocks2)

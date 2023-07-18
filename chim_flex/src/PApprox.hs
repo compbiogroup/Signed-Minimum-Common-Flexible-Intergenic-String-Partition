@@ -41,6 +41,7 @@ vBeg = vIdx
 vEnd :: Vertex -> Idx
 vEnd v = vIdx v + mkIdx (vSize v) - 1
 
+-- Graph where each vertex is a block and an edge connects two vertices if they are correspondents, also has a space to record the number of the connected components containing each graph
 data BlockMatchGraph g1 g2 = BG (Partition g1) (Partition g2) (Map Vertex (Maybe Int, Correspondents)) deriving (Show)
 
 data Component = Component
@@ -51,11 +52,12 @@ data Component = Component
   }
   deriving (Show)
 
+-- count the number of perfect components
 countPerfect :: IntMap Component -> Int
 countPerfect = sum . map (fromEnum . cPerfect) . IntMap.elems
 
 approxPartition :: (Orientable g1, Orientable g2, Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> g1 -> g2 -> CommonPartition g1 g2
-approxPartition matcher g h = mkCommonPartition pg ph
+approxPartition matcher g h = mkCommonPartition matcher pg ph
   where
     pg_0 = trivialPartition g
     ph_0 = trivialPartition h
@@ -106,10 +108,11 @@ addBreaks matcher (comps, bmg@(BG pg ph corres), breakSet, _) =
         Nothing -> error patternError
     testIRs = listToMaybe . mapMaybe testIR $ [vBeg v .. vEnd v - 1]
     testIR i =
-      let (a, b) = (canonicOri *** canonicOri) $
-            if vInG v
-              then (getGene i g, getGene (i + 1) g)
-              else (getGene i h, getGene (i + 1) h)
+      let (a, b) =
+            (canonicOri *** canonicOri) $
+              if vInG v
+                then (getGene i g, getGene (i + 1) g)
+                else (getGene i h, getGene (i + 1) h)
        in if (a, b) `Set.member` breakSet || (b, a) `Set.member` breakSet
             then Just i
             else Nothing
@@ -127,7 +130,7 @@ getConnectedComponents (BG pg ph corres) = (comps, BG pg ph corres')
         Just _ -> (comps', corres'', comp_id)
         Nothing ->
           let (corres''', vs, cont_G, cont_H) = visitComp comp_id v (corres'', [], 0, 0)
-              perfect = isJust (testPerfectMatch corres''' vs)
+              perfect = testPerfectMatch corres''' vs
               comp = Component v cont_G cont_H perfect
               comps'' = IntMap.insert comp_id comp comps'
            in (comps'', corres''', comp_id + 1)
@@ -145,30 +148,38 @@ getConnectedComponents (BG pg ph corres) = (comps, BG pg ph corres')
                in foldr (visitComp comp_id) (aux_corres', v : vs, cont_G', cont_H') neigs
 
     -- Given a correspondence and a list of vertices from a component c,
-    -- checks if c admits a perfect match
-    testPerfectMatch aux_corres = foldrM (selectPBlock Set.empty) Map.empty
+    -- checks if c admits a perfect match.
+    -- Note that we check both directions if the blocks in G can be assigned to blocks
+    -- of H and if blocks of H can be assigned to blocks of G.
+    testPerfectMatch :: Map Vertex (Maybe Int, Correspondents) -> [Vertex] -> Bool
+    testPerfectMatch aux_corres allVertices =
+      not (null hVertices) && isJust (foldrM (selectBlock Set.empty) Map.empty hVertices)
       where
-        -- blocksFromG saves blocks from G correspondent to each position of blocks in H
-        selectPBlock seen v blocksFromG =
-          if done then Just blocksFromG' else Nothing
+        -- select only vertices from H, to avoid double checking
+        hVertices = filter (not . vInG) allVertices
+        -- Select block from G/H that corresponds to block represented by v.
+        -- fixCorres saves a map between blocks of G/H and their fix correspondent
+        -- in H/G.
+        selectBlock seen v fixCorres =
+          if done then Just fixCorres' else Nothing
           where
-            (_, blocksFromG', done) = selectPBlock' seen v blocksFromG
+            (_, fixCorres', done) = selectBlock' seen v fixCorres
 
-        selectPBlock' seen v = testCandidates v neigs seen
+        selectBlock' seen v = testCandidates v neigs seen
           where
             (_, neigs) = aux_corres Map.! v
 
-        testCandidates _ [] seen blocksFromG = (seen, blocksFromG, False)
-        testCandidates v (u : us) seen blocksFromG =
+        testCandidates _ [] seen fixCorres = (seen, fixCorres, False)
+        testCandidates v (u : us) seen fixCorres =
           if
-              | u `Set.member` seen -> testCandidates v us seen blocksFromG
-              | u `Map.notMember` blocksFromG -> (seen', blocksFromG', True)
+              | u `Set.member` seen -> testCandidates v us seen fixCorres
+              | u `Map.notMember` fixCorres -> (seen', fixCorres', True)
               | done -> (seen_rec, blocksFromG_rec', True)
               | otherwise -> testCandidates v us seen_rec blocksFromG_rec
           where
             seen' = Set.insert u seen
-            blocksFromG' = Map.insert u v blocksFromG
-            (seen_rec, blocksFromG_rec, done) = selectPBlock' seen' (blocksFromG Map.! u) blocksFromG
+            fixCorres' = Map.insert u v fixCorres
+            (seen_rec, blocksFromG_rec, done) = selectBlock' seen' (fixCorres Map.! u) fixCorres
             blocksFromG_rec' = Map.insert u v blocksFromG_rec
 
 -- Construct the block match graph, which is represented by an adjacency list decorated -- with information about the component (to be filled by getConnectedComponents later).

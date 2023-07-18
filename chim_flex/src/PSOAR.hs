@@ -29,7 +29,7 @@ soarPartition matcher g_ h_ = combine matcher part
     -- (g, h) = (g_, h_)
     nG = size g
     nH = size h
-    part = mkCommonPartition2 g breaksG h breaksH
+    part = mkCommonPartition2 matcher g breaksG h breaksH
     graph = makePMGraph4 matcher g h
     (breaksG, breaksH) = getBpsFromIS nG nH graph . independentSet $ graph
 

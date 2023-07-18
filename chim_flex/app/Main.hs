@@ -19,7 +19,7 @@ import Data.Time (diffUTCTime, getCurrentTime)
 import Genomes (RigidFlexibleReverseMatcher (..), Sign (..), readFGenome, readRGenome, GenesIRsR, GenesIRsF)
 import LocalBase
 import Options.Applicative
-import Partition (getBlocksMatchGraph, writePartition, CommonPartition)
+import Partition (getBlocksCorrespondence, writePartition, CommonPartition)
 import Text.Printf (printf)
 import PSOAR (soarPartition)
 
@@ -91,16 +91,16 @@ main = do
     fromAns ((s1, i1, s2, i2, bmg), time) = s1 : i1 : s2 : i2 : bmg : [time]
 
 produceBlockMatch :: Sign -> (BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString) -> (BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString)
-produceBlockMatch sign (s1, i1, s2, i2) = (s1', i1', s2', i2', bmg)
+produceBlockMatch sign (s1, i1, s2, i2) = (s1', i1', s2', i2', bc)
   where
     (s1', i1', s2', i2') = writePartition part
     part = getPartition g h
-    bmg = writeBlocksMatchGraph $ getBlocksMatchGraph RFRM part
+    bc = writeBlocksCorrespondence $ getBlocksCorrespondence RFRM part
     g = readRGenome True sign s1 i1
     h = readFGenome True sign s2 i2
 
-writeBlocksMatchGraph :: [[Int]] -> BS.ByteString
-writeBlocksMatchGraph = BS.unwords . (\l -> interleavelists l (replicate (length l - 1) "|")) . map (BS.unwords . map (LBS.toStrict . toLazyByteString . intDec))
+writeBlocksCorrespondence :: [[Int]] -> BS.ByteString
+writeBlocksCorrespondence = BS.unwords . (\l -> interleavelists l (replicate (length l - 1) "|")) . map (BS.unwords . map (LBS.toStrict . toLazyByteString . intDec))
 
 getPartition :: GenesIRsR -> GenesIRsF -> CommonPartition GenesIRsR GenesIRsF
 getPartition = soarPartition RFRM
