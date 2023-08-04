@@ -2,6 +2,13 @@
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE TupleSections #-}
 
+-- \|
+-- Module      : PApprox
+-- Description : Approximation algorithm for partition problems. The approximation
+-- factor depends on the maximum occurrence of a gene in the genomes.
+-- Copyright   : (c) Gabriel Siqueira, 2023
+-- License     : BSD3
+-- Maintainer  : gabriel.gabrielhs@gmail.com
 module PApprox
   ( approxPartition,
     countPerfect,

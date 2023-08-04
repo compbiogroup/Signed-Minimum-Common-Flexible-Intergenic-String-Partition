@@ -2,6 +2,13 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE MultiWayIf #-}
 
+-- \|
+-- Module      : PGreedy
+-- Description : Implementation of the algorithm in the SOAR framework for string
+-- partition adapted to include intergenic region information.
+-- Copyright   : (c) Gabriel Siqueira, 2023
+-- License     : BSD3
+-- Maintainer  : gabriel.gabrielhs@gmail.com
 module PSOAR
   ( soarPartition,
     suboptimalRuleInterval,
@@ -21,7 +28,7 @@ import Partition (CommonPartition, combine, mkCommonPartition2)
 import Text.Printf (PrintfArg, printf)
 
 soarPartition :: (Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> g1 -> g2 -> CommonPartition g1 g2
-soarPartition matcher g_ h_ = combine matcher part
+soarPartition matcher g_ h_ = part -- combine matcher part
   where
     (g, h) = uncurry (suboptimalRulePairs matcher) (suboptimalRuleInterval matcher g_ h_)
     -- replace the previous line with this next one to disable the use of

@@ -7,6 +7,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE UndecidableInstances #-}
 
+-- |
+-- Module      : Genomes
+-- Description : Representation of a Genome. The representation may include information
+-- regarding intergenic regions and gene orientation.
+-- Copyright   : (c) Gabriel Siqueira, 2023
+-- License     : BSD3
+-- Maintainer  : gabriel.gabrielhs@gmail.com
 module Genomes
   ( Genome (..),
     IntergenicGenome (..),
@@ -241,8 +248,9 @@ instance IntergenicGenome GenesIRs where
       vi' = Vec.reverse vi
 
 instance Orientable GenesIRs where
-  getOri g@(GenesIRs _ genes irs _) = if (genes,irs) <= (genes',irs') then LR else RL
-    where (GenesIRs _ genes' irs' _) = invOri g
+  getOri g@(GenesIRs _ genes irs _) = if (genes, irs) <= (genes', irs') then LR else RL
+    where
+      (GenesIRs _ genes' irs' _) = invOri g
   invOri = intergenicFullReversal
 
 newtype GenesIRsR = GLR GenesIRs deriving newtype (Show, Genome, IntergenicGenome, Orientable)

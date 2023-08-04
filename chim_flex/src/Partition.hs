@@ -25,6 +25,12 @@ module Partition
   )
 where
 
+-- \|
+-- Module      : Genomes
+-- Description : Genome Partition representation and functions to manipulate it.
+-- Copyright   : (c) Gabriel Siqueira, 2023
+-- License     : BSD3
+-- Maintainer  : gabriel.gabrielhs@gmail.com
 import Control.Exception (assert)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS

@@ -2,6 +2,13 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE MultiWayIf #-}
 
+-- \|
+-- Module      : PGreedy
+-- Description : Implementation of the greedy algorithm for string partition adapted
+-- to include intergenic region information.
+-- Copyright   : (c) Gabriel Siqueira, 2023
+-- License     : BSD3
+-- Maintainer  : gabriel.gabrielhs@gmail.com
 module PGreedy
   ( greedyPart,
     longestSubstring,

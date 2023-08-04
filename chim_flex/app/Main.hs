@@ -4,8 +4,8 @@
 
 -- |
 -- Module      : MCFISP2K
--- Description : Heuristic for Genome partition problems with flexible intergenic regions.
--- Copyright   : (c) Gabriel Siqueira, 2021
+-- Description : Algorithms for Genome partition problems with flexible intergenic regions.
+-- Copyright   : (c) Gabriel Siqueira, 2023
 -- License     : BSD3
 -- Maintainer  : gabriel.gabrielhs@gmail.com
 module Main (main) where

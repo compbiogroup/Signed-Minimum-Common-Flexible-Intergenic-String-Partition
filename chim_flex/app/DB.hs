@@ -3,6 +3,13 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TupleSections #-}
 
+-- |
+-- Module      : DB
+-- Description : Code to generate database with artificial genomes represented by
+-- strings plus some intergenic region information.
+-- Copyright   : (c) Gabriel Siqueira, 2023
+-- License     : BSD3
+-- Maintainer  : gabriel.gabrielhs@gmail.com
 module DB where
 
 import Control.Monad (replicateM)

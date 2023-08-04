@@ -1,13 +1,19 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE ImportQualifiedPost #-}
 
 module LocalBase where
 
-import qualified Data.HashSet as HashSet
-import qualified Data.List as List
+-- Module      : LocalBase
+-- Description : Auxiliar functions.
+-- Copyright   : (c) Gabriel Siqueira, 2023
+-- License     : BSD3
+-- Maintainer  : gabriel.gabrielhs@gmail.com
+import Data.HashSet qualified as HashSet
 import Data.Hashable (Hashable)
-import Debug.Trace (trace)
 import Data.List (sortBy)
+import Data.List qualified as List
+import Debug.Trace (trace)
 
 newtype Dist = Dist Int deriving newtype (Eq, Show, Read)
 
@@ -76,7 +82,11 @@ maxWith f l =
   if null l
     then Nothing
     else Just $ List.maximumBy (\x y -> compare (f x) (f y)) l
-      
+
 sortWith :: Ord b => (a -> b) -> [a] -> [a]
 -- sort list converting values with function
 sortWith f = sortBy (\x y -> compare (f x) (f y))
+
+xOr :: Bool -> Bool -> Bool
+-- ^ XOR boolean operator
+xOr p q = (p || q) && not (p && q)
