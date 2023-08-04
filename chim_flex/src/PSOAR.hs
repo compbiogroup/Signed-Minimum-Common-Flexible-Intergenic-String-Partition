@@ -104,8 +104,8 @@ instance PMGraph (PMGraph4 g1 g2) where
 getBpsFromIS :: Int -> Int -> PMGraph4 g1 g2 -> BitMask -> (EnumSet Idx, EnumSet Idx)
 getBpsFromIS nG nH (PMGraph4 _ pms) indSet = (bpsG, bpsH)
   where
-    bpsG = EnumSet.fromList $ [1 .. mkIdx nG] List.\\ getDues False
-    bpsH = EnumSet.fromList $ [1 .. mkIdx nH] List.\\ getDues True
+    bpsG = EnumSet.fromList $ [1 .. mkIdx nG - 1] List.\\ getDues False
+    bpsH = EnumSet.fromList $ [1 .. mkIdx nH - 1] List.\\ getDues True
     getDues isSecond =
       mapMaybe
         ( \(_, _, idx1, idx2, v) ->
