@@ -19,13 +19,14 @@ import Partition
 import PSOAR
 import PGreedy
 import PApprox
+import PFpt
 import LocalBase
 import Partition (checkCommon)
 
 prop_commonPrefixFromBothAreEqual :: Property
 prop_commonPrefixFromBothAreEqual =
   property $ do
-    g <- forAll genRGenome
+    g <- forAll (genRGenome 100)
     k <- forAll $ Gen.int (Range.linear 0 (size g))
     h <- forAll $ rearrangeGenome k g
     idx_g <- mkIdx <$> forAll (Gen.int (Range.linear 1 (size g)))
@@ -38,7 +39,7 @@ prop_commonPrefixFromBothAreEqual =
 prop_longestSubstringFromBothAreEqual :: Property
 prop_longestSubstringFromBothAreEqual =
   property $ do
-    g <- forAll genRGenome
+    g <- forAll (genRGenome 100)
     k <- forAll $ Gen.int (Range.linear 0 (size g))
     h <- forAll $ rearrangeGenome k g
     let (((g_beg, g_end), (h_beg, h_end)), _, _) = fromJust $ longestSubstring Nothing RRRM EnumSet.empty EnumSet.empty g h
@@ -55,7 +56,7 @@ prop_suboptimalRulePairsTurnsReplicasIntoSingletons = suboptimalRuleTurnsReplica
 suboptimalRuleTurnsReplicasIntoSingletons :: (RigidRigidReverseMatcher GenesIRsR GenesIRsR -> GenesIRsR -> GenesIRsR -> (GenesIRsR, GenesIRsR)) -> Property
 suboptimalRuleTurnsReplicasIntoSingletons rule =
   property $ do
-    g <- forAll genRGenome
+    g <- forAll (genRGenome 100)
     k <- forAll $ Gen.int (Range.linear 0 (size g))
     h <- forAll $ rearrangeGenome k g
     (g', h') <- forAll . return $ rule RRRM g h
@@ -77,7 +78,7 @@ prop_suboptimalRulePairsKeepBalancedGenomes = suboptimalRuleKeepBalancedGenomes 
 suboptimalRuleKeepBalancedGenomes :: (RigidRigidReverseMatcher GenesIRsR GenesIRsR -> GenesIRsR -> GenesIRsR -> (GenesIRsR, GenesIRsR)) -> Property
 suboptimalRuleKeepBalancedGenomes rule =
   property $ do
-    g <- forAll genRGenome
+    g <- forAll (genRGenome 100)
     k <- forAll $ Gen.int (Range.linear 0 (size g))
     h <- forAll $ rearrangeGenome k g
     (g', h') <- forAll . return $ rule RRRM g h
@@ -85,7 +86,7 @@ suboptimalRuleKeepBalancedGenomes rule =
 
 prop_bpsToBlockDelsIsomorphism :: Property
 prop_bpsToBlockDelsIsomorphism = property $ do
-  (GW g) <- forAll genGenome
+  (GW g) <- forAll (genGenome 100)
   k <- forAll $ Gen.int (Range.linear 0 (size g - 2))
   bps_ <- forAll . fmap (take k) . Gen.shuffle $ [1 .. mkIdx (size g - 1)]
   let bps = EnumSet.fromList bps_
@@ -94,31 +95,35 @@ prop_bpsToBlockDelsIsomorphism = property $ do
 prop_equalGenomesHaveOnlyPerfectComponetsOnBMG :: Property
 prop_equalGenomesHaveOnlyPerfectComponetsOnBMG =
   property $ do
-    g <- forAll genRGenome
+    g <- forAll (genRGenome 100)
     let pg = trivialPartition g
     let (comps, _) = getConnectedComponents (mkBlockMatchGraph RRRM pg pg)
     assert $ countPerfect comps == IntMap.size comps
 
 prop_greedyPartitionProduceValidCorrespondence :: Property
 prop_greedyPartitionProduceValidCorrespondence =
-  partitionProduceValidCorrespondence (greedyPart False)
+  partitionProduceValidCorrespondence (greedyPart False) 100
 
 prop_greedyPartitionSingProduceValidCorrespondence :: Property
 prop_greedyPartitionSingProduceValidCorrespondence =
-  partitionProduceValidCorrespondence (greedyPart True)
+  partitionProduceValidCorrespondence (greedyPart True) 100
 
 prop_soarPartitionProduceValidCorrespondence :: Property
 prop_soarPartitionProduceValidCorrespondence =
-  partitionProduceValidCorrespondence soarPartition
+  partitionProduceValidCorrespondence soarPartition 100
 
 prop_approxPartitionProduceValidCorrespondence :: Property
 prop_approxPartitionProduceValidCorrespondence =
-  partitionProduceValidCorrespondence approxPartition
+  partitionProduceValidCorrespondence approxPartition 100
 
-partitionProduceValidCorrespondence :: (RigidRigidReverseMatcher GenesIRsR GenesIRsR -> GenesIRsR -> GenesIRsR -> CommonPartition GenesIRsR GenesIRsR) -> Property
-partitionProduceValidCorrespondence partAlg =
+prop_fptPartitionProduceValidCorrespondence :: Property
+prop_fptPartitionProduceValidCorrespondence =
+  partitionProduceValidCorrespondence fptPartition 20
+
+partitionProduceValidCorrespondence :: (RigidRigidReverseMatcher GenesIRsR GenesIRsR -> GenesIRsR -> GenesIRsR -> CommonPartition GenesIRsR GenesIRsR) -> Int -> Property
+partitionProduceValidCorrespondence partAlg size_lim =
   property $ do
-    g <- forAll genRGenome
+    g <- forAll (genRGenome size_lim)
     k <- forAll $ Gen.int (Range.linear 0 (size g))
     h <- forAll $ rearrangeGenome k g
     part <- forAll . return $ partAlg RRRM g h
@@ -127,7 +132,7 @@ partitionProduceValidCorrespondence partAlg =
 
 tests :: IO Bool
 tests = checkSequential $$(discover)
--- tests = check prop_approxPartitionProduceValidCorrespondence
+-- tests = check prop_fptPartitionProduceValidCorrespondence
 -- tests = do
   -- recheck (Size 0) (Seed 12439291806607096571 15074968846026035773) prop_equalGenomesHaveOnlyPerfectComponetsOnBMG
   -- return True

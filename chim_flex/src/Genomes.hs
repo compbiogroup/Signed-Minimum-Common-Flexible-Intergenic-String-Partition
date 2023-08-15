@@ -284,12 +284,15 @@ writeIR ir = LBS.toStrict $ case ir of
   R i -> toLazyByteString . intDec $ i
   F l u -> (toLazyByteString . intDec $ l) <> ":" <> (toLazyByteString . intDec $ u)
 
+splitElements :: BS.ByteString -> [BS.ByteString]
+splitElements = filter (not . BS.null) . BS.splitWith (\x -> x == ',' || x == ' ')
+
 readRGenome :: Bool -> Sign -> BS.ByteString -> BS.ByteString -> GenesIRsR
 readRGenome extend sign bs_genes bs_irs = mkRGenome extend sign genes irs
   where
     readInt = fst . fromJust . BS.readInt
-    genes = map readInt . BS.splitWith (\x -> x == ',' || x == ' ') $ bs_genes
-    irs = map readInt . BS.splitWith (\x -> x == ',' || x == ' ') $ bs_irs
+    genes = map readInt . splitElements $ bs_genes
+    irs = map readInt . splitElements $ bs_irs
 
 writeRGenome :: Bool -> GenesIRsR -> (BS.ByteString, BS.ByteString)
 writeRGenome rext g@(GLR (GenesIRs _ genes irs _)) =
@@ -304,8 +307,8 @@ readFGenome :: Bool -> Sign -> BS.ByteString -> BS.ByteString -> GenesIRsF
 readFGenome extend sign bs_genes bs_irs = mkFGenome extend sign genes irs
   where
     readInt = fst . fromJust . BS.readInt
-    genes = map readInt . BS.splitWith (\x -> x == ',' || x == ' ') $ bs_genes
-    irs = map readF . BS.splitWith (\x -> x == ',' || x == ' ') $ bs_irs
+    genes = map readInt . splitElements $ bs_genes
+    irs = map readF . splitElements $ bs_irs
     readF fir =
       case BS.splitWith (== ':') fir of
         [lir, uir] -> (readInt lir, readInt uir)

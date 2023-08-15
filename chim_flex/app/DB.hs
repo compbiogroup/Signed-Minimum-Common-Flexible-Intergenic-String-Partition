@@ -218,7 +218,7 @@ genPair Args {..} = do
     ins_for_one (d, next) = Just . (,(d - 1, next + 1)) $ \g -> do
       i <- getRandomR (1 :: Idx, mkIdx $ size g - 1)
       ir1 <- if db_zeros then return 0 else getRandomR (0, 100)
-      ir2 <- if db_zeros then return 0 else getRandomR (max 0 ((irToInt $ getIR i g) - ir1), 100)
+      ir2 <- if db_zeros then return 0 else getRandomR (max 0 (irToInt (getIR i g) - ir1), 100)
       return $ intergenicInsertion i (mkRGenome False db_sign [next] [ir1, ir2]) g
 
     applyOperations :: (RigidIntergenicGenome g, IntergenicGenome g) => g -> Rand StdGen g

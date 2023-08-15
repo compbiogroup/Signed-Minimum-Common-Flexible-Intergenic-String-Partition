@@ -9,6 +9,7 @@ module LocalBase where
 -- Copyright   : (c) Gabriel Siqueira, 2023
 -- License     : BSD3
 -- Maintainer  : gabriel.gabrielhs@gmail.com
+
 import Data.HashSet qualified as HashSet
 import Data.Hashable (Hashable)
 import Data.List (sortBy)

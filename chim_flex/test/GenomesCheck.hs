@@ -4,7 +4,7 @@
 
 module GenomesCheck (tests, genGenome, genRGenome, rearrangeGenome, GenomeWrapper (..)) where
 
-import Control.Monad.Random (MonadRandom, evalRandIO, getRandomR, replicateM)
+import Control.Monad.Random (replicateM)
 import Genomes
 import Hedgehog
 import Hedgehog.Gen qualified as Gen
@@ -23,24 +23,24 @@ instance Show GenomeWrapper where
   show (GW g) = show g
 
 -- Genomes will have size at least 3 (extensions plus at least one gene)
-genGenome :: Gen GenomeWrapper
-genGenome = do
+genGenome :: Int -> Gen GenomeWrapper
+genGenome size_lim = do
   flex <- Gen.bool
   if flex
-    then GW <$> genFGenome
-    else GW <$> genRGenome
+    then GW <$> genFGenome size_lim
+    else GW <$> genRGenome size_lim
 
 -- | Generate an empty rigid genome
-genRGenome :: Gen GenesIRsR
+genRGenome :: Int -> Gen GenesIRsR
 genRGenome = genRGenomeWithSign Signed
 
 -- | Generate an empty flexible genome
-genFGenome :: Gen GenesIRsF
+genFGenome :: Int -> Gen GenesIRsF
 genFGenome = genFGenomeWithSign Signed
 
-genRGenomeWithSign :: Sign -> Gen GenesIRsR
-genRGenomeWithSign sign = do
-  n <- Gen.int (Range.linear 3 100)
+genRGenomeWithSign :: Sign -> Int -> Gen GenesIRsR
+genRGenomeWithSign sign size_lim = do
+  n <- Gen.int (Range.linear 3 size_lim)
   coins <- Gen.list (Range.singleton n) Gen.bool
   genes <-
     ( case sign of
@@ -53,9 +53,9 @@ genRGenomeWithSign sign = do
   where
     swaps b v = if b then v else -v
 
-genFGenomeWithSign :: Sign -> Gen GenesIRsF
-genFGenomeWithSign sign = do
-  n <- Gen.int (Range.linear 3 100)
+genFGenomeWithSign :: Sign -> Int -> Gen GenesIRsF
+genFGenomeWithSign sign size_lim = do
+  n <- Gen.int (Range.linear 3 size_lim)
   coins <- Gen.list (Range.singleton n) Gen.bool
   genes <-
     ( case sign of
@@ -89,26 +89,26 @@ applyReversals k g =
 
 prop_getGeneIsGene :: Property
 prop_getGeneIsGene = property $ do
-  (GW g) <- forAll genGenome
+  (GW g) <- forAll (genGenome 100)
   idx <- mkIdx <$> forAll (Gen.int (Range.linear 1 (size g)))
   assert $ getGene idx g `isGene` g
 
 prop_invGeneIsGene :: Property
 prop_invGeneIsGene = property $ do
-  (GW g) <- forAll genGenome
+  (GW g) <- forAll (genGenome 100)
   idx <- mkIdx <$> forAll (Gen.int (Range.linear 1 (size g)))
   assert $ invGene g (getGene idx g) `isGene` g
 
 prop_invGeneIsAutoinverse :: Property
 prop_invGeneIsAutoinverse = property $ do
-  (GW g) <- forAll genGenome
+  (GW g) <- forAll (genGenome 100)
   idx <- mkIdx <$> forAll (Gen.int (Range.linear 1 (size g)))
   let gene = getGene idx g
   invGene g (invGene g gene) === gene
 
 prop_setGenesAreGenesInIndices :: Property
 prop_setGenesAreGenesInIndices = property $ do
-  (GW g) <- forAll genGenome
+  (GW g) <- forAll (genGenome 100)
   genes <- forAll $ Gen.list (Range.linear 1 (size g - 2)) (mkGene <$> Gen.int (Range.linear 1 200))
   indices <- forAll $ take (length genes) <$> Gen.shuffle [2 .. mkIdx (size g - 1)]
   let g' = setGenes indices genes g
@@ -116,7 +116,7 @@ prop_setGenesAreGenesInIndices = property $ do
 
 prop_makeSingletonsAddSingletonsInIndices :: Property
 prop_makeSingletonsAddSingletonsInIndices = property $ do
-  (GW g) <- forAll genGenome
+  (GW g) <- forAll (genGenome 100)
   k <- forAll $ Gen.int (Range.linear 1 (min 5 (size g - 2)))
   indices <- forAll $ take k <$> Gen.shuffle [2 .. mkIdx (size g - 1)]
   let (g', genes) = makeSingletons g indices g
@@ -130,14 +130,14 @@ prop_makeSingletonsAddSingletonsInIndices = property $ do
 
 prop_alphabetAreGenes :: Property
 prop_alphabetAreGenes = property $ do
-  (GW g) <- forAll genGenome
+  (GW g) <- forAll (genGenome 100)
   let alp = alphabet g
   assert $ all (`isGene` g) alp
 
 prop_newGeneIsNotGeneAftersetGenes :: Property
 prop_newGeneIsNotGeneAftersetGenes =
   property $ do
-    (GW g) <- forAll genGenome
+    (GW g) <- forAll (genGenome 100)
     genes <- forAll $ Gen.list (Range.linear 1 (size g - 2)) (mkGene <$> Gen.int (Range.linear 1 200))
     indices <- forAll $ take (length genes) <$> Gen.shuffle [2 .. mkIdx (size g - 1)]
     let g' = setGenes indices genes g
@@ -145,7 +145,7 @@ prop_newGeneIsNotGeneAftersetGenes =
 
 prop_newGeneIsNotGeneAfterMakeSingletons :: Property
 prop_newGeneIsNotGeneAfterMakeSingletons = property $ do
-  (GW g) <- forAll genGenome
+  (GW g) <- forAll (genGenome 100)
   k <- forAll $ Gen.int (Range.linear 1 (min 5 (size g - 2)))
   indices <- forAll $ take k <$> Gen.shuffle [2 .. mkIdx (size g - 1)]
   let (g', _) = makeSingletons g indices g
@@ -153,7 +153,7 @@ prop_newGeneIsNotGeneAfterMakeSingletons = property $ do
 
 prop_reversalsKeepBalanced :: Property
 prop_reversalsKeepBalanced = property $ do
-  g <- forAll genRGenome
+  g <- forAll (genRGenome 100)
   k <- forAll $ Gen.int (Range.linear 0 (size g))
   h <- forAll $ applyReversals k g
   assert $ areBalanced RRRM g h
