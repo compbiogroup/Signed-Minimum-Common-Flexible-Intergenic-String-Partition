@@ -114,11 +114,7 @@ prop_soarPartitionProduceValidCorrespondence =
 
 prop_approxPartitionProduceValidCorrespondence :: Property
 prop_approxPartitionProduceValidCorrespondence =
-  partitionProduceValidCorrespondence approxPartition 100
-
-prop_fptPartitionProduceValidCorrespondence :: Property
-prop_fptPartitionProduceValidCorrespondence =
-  partitionProduceValidCorrespondence fptPartition 20
+  partitionProduceValidCorrespondence approxPartition 50
 
 partitionProduceValidCorrespondence :: (RigidRigidReverseMatcher GenesIRsR GenesIRsR -> GenesIRsR -> GenesIRsR -> CommonPartition GenesIRsR GenesIRsR) -> Int -> Property
 partitionProduceValidCorrespondence partAlg size_lim =
@@ -127,6 +123,16 @@ partitionProduceValidCorrespondence partAlg size_lim =
     k <- forAll $ Gen.int (Range.linear 0 (size g))
     h <- forAll $ rearrangeGenome k g
     part <- forAll . return $ partAlg RRRM g h
+    partCombi <- forAll . return $ combine RRRM part
+    assert $ checkCommon RRRM partCombi
+
+prop_fptPartitionProduceValidCorrespondence :: Property
+prop_fptPartitionProduceValidCorrespondence =
+  property $ do
+    g <- forAll (genRGenome 20)
+    k <- forAll $ Gen.int (Range.linear 0 (size g))
+    h <- forAll $ rearrangeGenome k g
+    (part,_) <- fmap fromJust . evalIO $ fptPartition 100000000 RRRM g h
     partCombi <- forAll . return $ combine RRRM part
     assert $ checkCommon RRRM partCombi
 

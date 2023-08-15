@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -18,16 +19,22 @@ module PFpt
   )
 where
 
+import Control.Concurrent (newMVar, readMVar, swapMVar)
+import Control.Concurrent.Async (race)
+import Control.Concurrent.MVar (MVar)
 import Control.Exception (assert)
+import Data.Either (isRight)
 import Data.EnumSet qualified as EnumSet
 import Data.Map qualified as Map
 import Data.Maybe (isNothing, listToMaybe)
 import Data.MultiMap (MultiMap)
 import Data.MultiMap qualified as MMap
 import Data.Set qualified as Set
+import GHC.Conc (threadDelay)
 import Genomes (Genome (getGene, size, subGenome), Idx, Matcher (isDirectMatch, isReverseMatch), decIdx, incIdx, mkIdx)
 import LocalBase
 import Partition (CommonPartition, mkCommonPartition2)
+import Control.Monad (void)
 
 data Vertex = Vtx
   { vInG :: Bool,
@@ -71,42 +78,57 @@ instance (Show g1, Show g2) => Show (SampleGraph m g1 g2) where
 -- TODO: To deal with unbalance strings the branching rule 2 still have to be
 -- implemented and a text must be include on the rare odd path to ensure that they
 -- are rare
-fptPartition :: (Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> g1 -> g2 -> CommonPartition g1 g2
-fptPartition matcher g h =
-  case maybe_sg' of
-    Nothing -> error patternError
-    Just sg' ->
-      sampleGraphToPartition
-        . (\sg -> assert (checkDegrees 1 1 sg) sg)
-        . finalizeCorrespondence
-        . (\sg -> assert (checkDegrees 1 2 sg) sg)
-        $ sg'
+fptPartition :: (Genome g1, Genome g2, Matcher m g1 g2) => Int -> m g1 g2 -> g1 -> g2 -> IO (Maybe (CommonPartition g1 g2, Bool))
+fptPartition time_limit matcher g h = do
+  best_sg <- newMVar Nothing
+  full_comp <- isRight <$> race (threadDelay time_limit) (runFpt best_sg sg0)
+  maybe_sg <- readMVar best_sg
+  return
+    . fmap
+      ( (,full_comp)
+          . sampleGraphToPartition
+          . (\sg' -> assert (checkDegrees 1 1 sg') sg')
+          . finalizeCorrespondence
+          . (\sg' -> assert (checkDegrees 1 2 sg') sg')
+      )
+    $ maybe_sg
   where
     sg0 = (\sg -> assert (checkDegrees 0 2 sg) sg) $ createSampleGraph matcher g h sample0
     sample0 = [] -- TODO: add an initial sample with the singletons of both strings
-    maybe_sg' = go sg0 Nothing
-    go sg best_sg =
+
+runFpt :: (Genome g1, Genome g2, Matcher m g1 g2) => MVar (Maybe (SampleGraph m g1 g2)) -> SampleGraph m g1 g2 -> IO ()
+runFpt best_sg = go
+  where
+    go !sg = do
+      test <- toBig sg
       if
-          | toBig sg best_sg -> best_sg
-          | isNothing maybe_oddPath -> selectSG sg best_sg
-          | null branch_edges -> best_sg
+          | test -> return ()
+          | isNothing maybe_oddPath -> selectSG sg
+          | null branch_edges -> return ()
           | otherwise ->
-              foldr
-                ( \edge best_sg' ->
+              mapM_
+                ( \edge ->
                     let sg' = addBlackEdge edge sg
-                     in assert (checkDegrees 0 2 sg') $ go sg' best_sg'
+                     in assert (checkDegrees 0 2 sg') $ go sg'
                 )
-                best_sg
                 branch_edges
       where
         branch_edges = maybe [] (edgesFromRareOddPath sg) maybe_oddPath
         maybe_oddPath = getRareOddPath sg
 
-    toBig _ Nothing = False
-    toBig sg (Just best_sg) = length (sample sg) >= length (sample best_sg)
-    selectSG sg Nothing = Just sg
-    selectSG sg (Just best_sg) =
-      if length (sample sg) < length (sample best_sg) then Just sg else Just best_sg
+    toBig sg = do
+      maybe_best_sg <- readMVar best_sg
+      case maybe_best_sg of
+        Nothing -> return False
+        Just best_sg' -> return $ length (sample sg) >= length (sample best_sg')
+    selectSG sg = do
+      maybe_best_sg <- readMVar best_sg
+      case maybe_best_sg of
+        Nothing ->
+          void (swapMVar best_sg (Just sg))
+        Just best_sg' -> do
+          _ <- swapMVar best_sg (if length (sample sg) < length (sample best_sg') then Just sg else Just best_sg')
+          return ()
 
 sampleGraphToPartition :: (Matcher m g1 g2, Genome g1, Genome g2) => SampleGraph m g1 g2 -> CommonPartition g1 g2
 sampleGraphToPartition (SG {..}) = mkCommonPartition2 sg_matcher sg_g bg sg_h bh

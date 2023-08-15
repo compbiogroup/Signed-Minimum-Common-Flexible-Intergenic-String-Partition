@@ -36,6 +36,7 @@ dependencies:
 - bytestring
 - enummapset
 - multimap
+- async
 
 ghc-options:
 - -Wall

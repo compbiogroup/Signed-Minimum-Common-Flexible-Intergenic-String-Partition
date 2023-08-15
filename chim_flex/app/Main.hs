@@ -21,7 +21,7 @@ import LocalBase
 import Options.Applicative
 import Partition (getBlocksCorrespondence, writePartition, CommonPartition)
 import Text.Printf (printf)
-import PSOAR (soarPartition)
+import PFpt (fptPartition)
 
 data Args = Args
   { input :: String,
@@ -79,28 +79,30 @@ main = do
   where
     runOne args (i, bstrs) = do
       start <- getCurrentTime
-      let !bstrs' = force $ produceBlockMatch (signed args) bstrs
+      !bstrs' <- produceBlockMatch (signed args) bstrs
       end <- getCurrentTime
       let time = BS.pack . (show :: Double -> String) . realToFrac $ diffUTCTime end start
-      BS.writeFile (output args ++ "_" ++ printf "%04d" i) . BS.unlines $ fromAns (bstrs', "# Time: " <> (BS.pack . show $ time))
+      BS.writeFile (output args ++ "_" ++ printf "%04d" i) . BS.unlines $ bstrs' ++ ["# Time: " <> (BS.pack . show $ time)]
 
     toQuadruples (s1 : i1 : s2 : i2 : ss) = (s1, i1, s2, i2) : toQuadruples ss
     toQuadruples [] = []
     toQuadruples _ = error "Incorrect number of lines."
 
-    fromAns ((s1, i1, s2, i2, bmg), time) = s1 : i1 : s2 : i2 : bmg : [time]
-
-produceBlockMatch :: Sign -> (BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString) -> (BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString)
-produceBlockMatch sign (s1, i1, s2, i2) = (s1', i1', s2', i2', bc)
+produceBlockMatch :: Sign -> (BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString) -> IO [BS.ByteString]
+produceBlockMatch sign (s1, i1, s2, i2) = do
+  maybe_part <- getPartition g h
+  case maybe_part of
+    Nothing -> return ["# No solution found in time"]
+    Just (part, fullComp) ->
+      let (s1', i1', s2', i2') = writePartition part
+          bc = writeBlocksCorrespondence $ getBlocksCorrespondence RFRM part
+      in return [s1', i1', s2', i2', bc, if fullComp then "# Exact solution" else "# Partial solution"]
   where
-    (s1', i1', s2', i2') = writePartition part
-    part = getPartition g h
-    bc = writeBlocksCorrespondence $ getBlocksCorrespondence RFRM part
     g = readRGenome True sign s1 i1
     h = readFGenome True sign s2 i2
 
 writeBlocksCorrespondence :: [[Int]] -> BS.ByteString
 writeBlocksCorrespondence = BS.unwords . (\l -> interleavelists l (replicate (length l - 1) "|")) . map (BS.unwords . map (LBS.toStrict . toLazyByteString . intDec))
 
-getPartition :: GenesIRsR -> GenesIRsF -> CommonPartition GenesIRsR GenesIRsF
-getPartition = soarPartition RFRM
+getPartition :: GenesIRsR -> GenesIRsF -> IO (Maybe (CommonPartition GenesIRsR GenesIRsF, Bool))
+getPartition = fptPartition 600000 RFRM
