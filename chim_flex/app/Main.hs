@@ -105,4 +105,4 @@ writeBlocksCorrespondence :: [[Int]] -> BS.ByteString
 writeBlocksCorrespondence = BS.unwords . (\l -> interleavelists l (replicate (length l - 1) "|")) . map (BS.unwords . map (LBS.toStrict . toLazyByteString . intDec))
 
 getPartition :: GenesIRsR -> GenesIRsF -> IO (Maybe (CommonPartition GenesIRsR GenesIRsF, Bool))
-getPartition = fptPartition 600000 RFRM
+getPartition = fptPartition 600000000 RFRM
