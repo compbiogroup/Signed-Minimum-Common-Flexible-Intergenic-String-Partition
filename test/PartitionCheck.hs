@@ -4,12 +4,11 @@
 
 module PartitionCheck (tests) where
 
-import Data.Foldable (foldrM)
 import Data.IntMap qualified as IntMap
-import Data.IntSet qualified as IntSet
 import Data.EnumSet qualified as EnumSet
 import Data.List qualified as List
-import Data.Maybe (fromJust, isJust)
+import Data.Maybe (fromJust)
+import Control.Arrow (first)
 import Genomes
 import GenomesCheck (GenomeWrapper (..), genGenome, genRGenome, rearrangeGenome)
 import Hedgehog
@@ -20,8 +19,6 @@ import PSOAR
 import PGreedy
 import PApprox
 import PFpt
-import LocalBase
-import Partition (checkCommon)
 
 prop_commonPrefixFromBothAreEqual :: Property
 prop_commonPrefixFromBothAreEqual =
@@ -132,7 +129,7 @@ prop_fptPartitionProduceValidCorrespondence =
     g <- forAll (genRGenome 20)
     k <- forAll $ Gen.int (Range.linear 0 (size g))
     h <- forAll $ rearrangeGenome k g
-    (part,_) <- fmap fromJust . evalIO $ fptPartition 100000000 RRRM g h
+    (part,_) <- fmap (first fromJust) . evalIO $ fptPartition 100000000 RRRM g h
     partCombi <- forAll . return $ combine RRRM part
     assert $ checkCommon RRRM partCombi
 

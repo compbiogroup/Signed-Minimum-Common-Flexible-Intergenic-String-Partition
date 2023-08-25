@@ -11,7 +11,6 @@
 module Main (main) where
 
 import Control.Concurrent.ParallelIO.Global (parallel_, stopGlobalPool)
-import Control.DeepSeq (force)
 import Data.ByteString.Builder (intDec, toLazyByteString)
 import Data.ByteString.Char8 qualified as BS
 import Data.ByteString.Lazy qualified as LBS
@@ -90,10 +89,10 @@ main = do
 
 produceBlockMatch :: Sign -> (BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString) -> IO [BS.ByteString]
 produceBlockMatch sign (s1, i1, s2, i2) = do
-  maybe_part <- getPartition g h
+  (maybe_part, fullComp) <- getPartition g h
   case maybe_part of
-    Nothing -> return ["# No solution found in time"]
-    Just (part, fullComp) ->
+    Nothing -> if fullComp then return ["# Error: Execution finish but no partition was found"] else return ["# No solution found in time"]
+    Just part ->
       let (s1', i1', s2', i2') = writePartition part
           bc = writeBlocksCorrespondence $ getBlocksCorrespondence RFRM part
       in return [s1', i1', s2', i2', bc, if fullComp then "# Exact solution" else "# Partial solution"]
@@ -104,5 +103,5 @@ produceBlockMatch sign (s1, i1, s2, i2) = do
 writeBlocksCorrespondence :: [[Int]] -> BS.ByteString
 writeBlocksCorrespondence = BS.unwords . (\l -> interleavelists l (replicate (length l - 1) "|")) . map (BS.unwords . map (LBS.toStrict . toLazyByteString . intDec))
 
-getPartition :: GenesIRsR -> GenesIRsF -> IO (Maybe (CommonPartition GenesIRsR GenesIRsF, Bool))
+getPartition :: GenesIRsR -> GenesIRsF -> IO (Maybe (CommonPartition GenesIRsR GenesIRsF), Bool)
 getPartition = fptPartition 600000000 RFRM

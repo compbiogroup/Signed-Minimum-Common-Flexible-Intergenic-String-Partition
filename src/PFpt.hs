@@ -23,6 +23,7 @@ import Control.Concurrent (newMVar, readMVar, swapMVar)
 import Control.Concurrent.Async (race)
 import Control.Concurrent.MVar (MVar)
 import Control.Exception (assert)
+import Control.Monad (void)
 import Data.Either (isRight)
 import Data.EnumSet qualified as EnumSet
 import Data.Map qualified as Map
@@ -34,7 +35,6 @@ import GHC.Conc (threadDelay)
 import Genomes (Genome (getGene, size, subGenome), Idx, Matcher (isDirectMatch, isReverseMatch), decIdx, incIdx, mkIdx)
 import LocalBase
 import Partition (CommonPartition, mkCommonPartition2)
-import Control.Monad (void)
 
 data Vertex = Vtx
   { vInG :: Bool,
@@ -78,15 +78,15 @@ instance (Show g1, Show g2) => Show (SampleGraph m g1 g2) where
 -- TODO: To deal with unbalance strings the branching rule 2 still have to be
 -- implemented and a text must be include on the rare odd path to ensure that they
 -- are rare
-fptPartition :: (Genome g1, Genome g2, Matcher m g1 g2) => Int -> m g1 g2 -> g1 -> g2 -> IO (Maybe (CommonPartition g1 g2, Bool))
+fptPartition :: (Genome g1, Genome g2, Matcher m g1 g2) => Int -> m g1 g2 -> g1 -> g2 -> IO (Maybe (CommonPartition g1 g2), Bool)
 fptPartition time_limit matcher g h = do
   best_sg <- newMVar Nothing
   full_comp <- isRight <$> race (threadDelay time_limit) (runFpt best_sg sg0)
   maybe_sg <- readMVar best_sg
   return
+    . (,full_comp)
     . fmap
-      ( (,full_comp)
-          . sampleGraphToPartition
+      ( sampleGraphToPartition
           . (\sg' -> assert (checkDegrees 1 1 sg') sg')
           . finalizeCorrespondence
           . (\sg' -> assert (checkDegrees 1 2 sg') sg')
