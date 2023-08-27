@@ -367,25 +367,39 @@ addBlackEdge bw sg@(SG {..}) = sg {sample = sample', edges = edges'''}
 finalizeCorrespondence :: (Genome g1) => SampleGraph m g1 g2 -> SampleGraph m g1 g2
 finalizeCorrespondence sg = sg2
   where
-    (seen1, sg1) = foldr (changePathsOdd False . Vtx True) (Set.empty, sg) [1 .. (mkIdx . size . sg_g $ sg)]
-    sg2 = snd $ foldr (changePathsOdd True . Vtx True) (seen1, sg1) [1 .. (mkIdx . size . sg_g $ sg1)]
+    (seen1, sg1) = foldr (changePaths . Vtx True) (Set.empty, sg) [1 .. (mkIdx . size . sg_g $ sg)]
+    sg2 = snd $ foldr (changeCycle . Vtx True) (seen1, sg1) [1 .. (mkIdx . size . sg_g $ sg1)]
 
-    changePathsOdd followPairs v (seen, sg_aux) =
+    changeCycle v (seen, sg_aux) =
       if v `Set.member` seen
         then (seen, sg_aux)
         else case edges sg_aux MMap.! v of
-          [] -> (aux_seen, sg_aux) -- path has only one vertex remaning
           [e1, e2] ->
-            if not followPairs
-              then (seen, sg_aux) -- not an extreme or is part of a cycle, so we ignore for now
-              else
-                let e =
-                      if (eOther e1 `Set.member` seen)
-                        || (fst (w_black_pair . eParent $ e2) < fst (eVpair e2))
-                          && (eOther e2 `Set.notMember` seen)
-                        then e2
-                        else e1
-                 in changePathsOdd True (eOther e) (aux_seen, sg_aux)
+            let e =
+                  if (eOther e1 `Set.member` seen)
+                    || (fst (w_black_pair . eParent $ e2) < fst (eVpair e2))
+                      && (eOther e2 `Set.notMember` seen)
+                    then e2
+                    else e1
+             in changePathsEven (eOther e) (aux_seen, sg_aux)
+          _ -> error patternError
+      where
+        aux_seen = Set.insert v seen
+
+    changePaths v (seen, sg_aux) =
+      if v `Set.member` seen
+        then (seen, sg_aux)
+        else case edges sg_aux MMap.! v of
+          [_, _] -> (seen, sg_aux) -- not an extreme or is part of a cycle, so we ignore for now
+          [e] -> changePathsEven (eOther e) (aux_seen, sg_aux)
+          _ -> error patternError
+      where
+        aux_seen = Set.insert v seen
+
+    changePathsOdd v (seen, sg_aux) =
+      if v `Set.member` seen
+        then (seen, sg_aux)
+        else case edges sg_aux MMap.! v of
           [e] -> changePathsEven (eOther e) (aux_seen, sg_aux)
           _ -> error patternError
       where
@@ -395,18 +409,17 @@ finalizeCorrespondence sg = sg2
       case edges sg_aux MMap.! v of
         [_] -> (aux_seen, sg_aux) -- path has only one vertex remaining
         [e1, e2] ->
-          let (e, u) =
+          let u =
                 if eOther e1 `Set.member` seen
-                  then (e2, eOther e1)
-                  else (e1, eOther e2)
-           in changePathsOdd True (eOther e) (aux_seen, sg_aux' u)
+                  then eOther e2
+                  else eOther e1
+           in changePathsOdd u (aux_seen, delete_edge u v sg_aux)
         _ -> error patternError
       where
         aux_seen = Set.insert v seen
-        sg_aux' u = sg_aux {edges = edges' u}
-        edges' u = updateEdgesInMap v u . updateEdgesInMap u v $ edges sg_aux
-        updateEdgesInMap u1 u2 m =
-          MMap.fromMap . Map.insert u1 (delEdge (m MMap.! u1)) . MMap.toMap $ m
+        delete_edge u1 u2 sg' = sg' {edges = updateEdgeInMap u1 u2 . updateEdgeInMap u2 u1 $ edges sg'}
+        updateEdgeInMap u1 u2 m =
+          MMap.fromMap . Map.insert u1 (delEdge [] (m MMap.! u1)) . MMap.toMap $ m
           where
-            delEdge [] = []
-            delEdge (y : ys) = if eOther y == u2 then ys else y : delEdge ys
+            delEdge _ [] = error patternError
+            delEdge acc (e : es) = if eOther e == u2 then reverse acc ++ es else delEdge (e:acc) es
