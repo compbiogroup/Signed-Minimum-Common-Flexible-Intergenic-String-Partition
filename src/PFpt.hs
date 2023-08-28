@@ -381,10 +381,8 @@ finalizeCorrespondence sg = sg2
                       && (eOther e2 `Set.notMember` seen)
                     then e2
                     else e1
-             in changePathsEven (eOther e) (aux_seen, sg_aux)
+             in changePathsEven (eOther e) (seen, sg_aux)
           _ -> error patternError
-      where
-        aux_seen = Set.insert v seen
 
     changePaths v (seen, sg_aux) =
       if v `Set.member` seen
