@@ -27,8 +27,8 @@ import LocalBase
 import Partition (CommonPartition, combine, mkCommonPartition2)
 import Text.Printf (PrintfArg, printf)
 
-soarPartition :: (Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> g1 -> g2 -> CommonPartition g1 g2
-soarPartition matcher g_ h_ = part -- combine matcher part
+soarPartition :: (Genome g1, Genome g2, Matcher m g1 g2) => Bool -> m g1 g2 -> g1 -> g2 -> CommonPartition g1 g2
+soarPartition use_combine matcher g_ h_ = (if use_combine then combine matcher else id) part
   where
     (g, h) = uncurry (suboptimalRulePairs matcher) (suboptimalRuleInterval matcher g_ h_)
     -- replace the previous line with this next one to disable the use of

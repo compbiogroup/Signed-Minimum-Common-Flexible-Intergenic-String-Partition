@@ -10,7 +10,7 @@
 -- License     : BSD3
 -- Maintainer  : gabriel.gabrielhs@gmail.com
 module PGreedy
-  ( greedyPart,
+  ( greedyPartition,
     longestSubstring,
     commonPrefix,
   )
@@ -27,8 +27,8 @@ import Partition (CommonPartition, mkCommonPartition2)
 -- | Greedy algorithm for string partition with intergenic regions or
 -- flexible intergeic regions. If withSingleton is True it looks first
 -- for matched blocks that contain a singleton.
-greedyPart :: (Genome g1, Genome g2, Matcher m g1 g2) => Bool -> m g1 g2 -> g1 -> g2 -> CommonPartition g1 g2
-greedyPart withSingleton matcher g h = mkCommonPartition2 matcher g bg h bh
+greedyPartition :: (Genome g1, Genome g2, Matcher m g1 g2) => Bool -> m g1 g2 -> g1 -> g2 -> CommonPartition g1 g2
+greedyPartition withSingleton matcher g h = mkCommonPartition2 matcher g bg h bh
   where
     bg = EnumSet.delete (mkIdx $ size g) . EnumSet.delete 0 $ final_breaksG
     bh = EnumSet.delete (mkIdx $ size h) . EnumSet.delete 0 $ final_breaksH

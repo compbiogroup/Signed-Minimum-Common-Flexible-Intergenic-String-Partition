@@ -99,15 +99,15 @@ prop_equalGenomesHaveOnlyPerfectComponetsOnBMG =
 
 prop_greedyPartitionProduceValidCorrespondence :: Property
 prop_greedyPartitionProduceValidCorrespondence =
-  partitionProduceValidCorrespondence (greedyPart False) 100
+  partitionProduceValidCorrespondence (greedyPartition False) 100
 
 prop_greedyPartitionSingProduceValidCorrespondence :: Property
 prop_greedyPartitionSingProduceValidCorrespondence =
-  partitionProduceValidCorrespondence (greedyPart True) 100
+  partitionProduceValidCorrespondence (greedyPartition True) 100
 
 prop_soarPartitionProduceValidCorrespondence :: Property
 prop_soarPartitionProduceValidCorrespondence =
-  partitionProduceValidCorrespondence soarPartition 100
+  partitionProduceValidCorrespondence (soarPartition False) 100
 
 prop_approxPartitionProduceValidCorrespondence :: Property
 prop_approxPartitionProduceValidCorrespondence =

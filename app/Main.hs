@@ -1,6 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 
 -- |
 -- Module      : MCFISP2K
@@ -20,19 +21,31 @@ import LocalBase
 import Options.Applicative
 import Partition (getBlocksCorrespondence, writePartition, CommonPartition)
 import Text.Printf (printf)
+import PSOAR (soarPartition)
+import PGreedy (greedyPartition)
+import PApprox (approxPartition)
 import PFpt (fptPartition)
 
 data Args = Args
-  { input :: String,
+  { partAlg :: PartitionAlgorithm,
+    input :: String,
     output :: String,
     noParallel :: Bool,
     signed :: Sign
   }
 
+data PartitionAlgorithm = SOAR | SOARComb | Greedy | GreedySin | Approx | FPT deriving (Read, Show)
+
 argsParser :: Parser Args
 argsParser =
   Args
-    <$> strOption
+    <$> option auto
+      ( long "algorithm"
+          <> short 'a'
+          <> metavar "ALGO"
+          <> help "Algorithm to use for the partition problem. The options are SOAR, Greedy, Approx, and Ppt."
+      )
+    <*> strOption
       ( long "input"
           <> short 'i'
           <> metavar "IFILE"
@@ -78,7 +91,7 @@ main = do
   where
     runOne args (i, bstrs) = do
       start <- getCurrentTime
-      !bstrs' <- produceBlockMatch (signed args) bstrs
+      !bstrs' <- produceBlockMatch (partAlg args) (signed args) bstrs
       end <- getCurrentTime
       let time = BS.pack . (show :: Double -> String) . realToFrac $ diffUTCTime end start
       BS.writeFile (output args ++ "_" ++ printf "%04d" i) . BS.unlines $ bstrs' ++ ["# Time: " <> (BS.pack . show $ time)]
@@ -87,9 +100,9 @@ main = do
     toQuadruples [] = []
     toQuadruples _ = error "Incorrect number of lines."
 
-produceBlockMatch :: Sign -> (BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString) -> IO [BS.ByteString]
-produceBlockMatch sign (s1, i1, s2, i2) = do
-  (maybe_part, fullComp) <- getPartition g h
+produceBlockMatch :: PartitionAlgorithm -> Sign -> (BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString) -> IO [BS.ByteString]
+produceBlockMatch alg sign (s1, i1, s2, i2) = do
+  (maybe_part, fullComp) <- getPartition alg g h
   case maybe_part of
     Nothing -> if fullComp then return ["# Error: Execution finish but no partition was found"] else return ["# No solution found in time"]
     Just part ->
@@ -103,5 +116,10 @@ produceBlockMatch sign (s1, i1, s2, i2) = do
 writeBlocksCorrespondence :: [[Int]] -> BS.ByteString
 writeBlocksCorrespondence = BS.unwords . (\l -> interleavelists l (replicate (length l - 1) "|")) . map (BS.unwords . map (LBS.toStrict . toLazyByteString . intDec))
 
-getPartition :: GenesIRsR -> GenesIRsF -> IO (Maybe (CommonPartition GenesIRsR GenesIRsF), Bool)
-getPartition = fptPartition 600000000 RFRM
+getPartition :: PartitionAlgorithm -> GenesIRsR -> GenesIRsF -> IO (Maybe (CommonPartition GenesIRsR GenesIRsF), Bool)
+getPartition FPT g h = fptPartition 600000000 RFRM g h
+getPartition SOAR g h = return . (,True) . Just $ soarPartition False RFRM g h
+getPartition SOARComb g h = return . (,True) . Just $ soarPartition True RFRM g h
+getPartition Greedy g h = return . (,True) . Just $ greedyPartition False RFRM g h
+getPartition GreedySin g h = return . (,True) . Just $ greedyPartition True RFRM g h
+getPartition Approx g h = return . (,True) . Just $ approxPartition RFRM g h
