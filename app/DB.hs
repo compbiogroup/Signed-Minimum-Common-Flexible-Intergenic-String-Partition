@@ -16,7 +16,7 @@ import Control.Monad (replicateM)
 import Control.Monad.Random (Rand, StdGen, evalRandIO, getRandomR, getRandoms)
 import Data.ByteString (ByteString)
 import Data.ByteString.Char8 qualified as BS
-import Data.List (unfoldr)
+import Data.List (unfoldr, transpose)
 import Data.Set qualified as Set
 import Genomes
 import Options.Applicative
@@ -39,7 +39,7 @@ data RepDB = RepDB
 
 newtype RandDB = RandDB {db_lim :: Int}
 
-data FlexLevel = Rigid | Flex Int
+data FlexLevel = Rigid | Flex Int Int
 
 data Args = Args
   { db_par :: Parameters,
@@ -92,14 +92,28 @@ randDBParser =
 
 flexParser :: Parser FlexLevel
 flexParser =
-  (\i -> if i == -1 then Rigid else Flex i)
+  ( \l h ->
+      if
+          | l == -1 && h == -1 -> Rigid
+          | h == -1 -> Flex l l
+          | l == -1 -> Flex h h
+          | otherwise -> Flex l h
+  )
     <$> option
       auto
-      ( long "flex"
+      ( long "flex-low"
           <> short 'f'
-          <> metavar "f"
+          <> metavar "LF"
           <> value (-1)
-          <> help "Whether to produce flexible intergenic regions on the target genome, the value represents the percentage of the intergenic regions size subtracted or added to produce the bound of the interval."
+          <> help "Whether to produce flexible intergenic regions on the target genome, the value represents the percentage of the intergenic regions size subtracted or added to produce the bound of the interval. If flex-hight is also present generate multiple files with flexibility values flex-low,flex-low + 10,...,flex-hight"
+      )
+    <*> option
+      auto
+      ( long "flex-hight"
+          <> short 'F'
+          <> metavar "HF"
+          <> value (-1)
+          <> help "Whether to produce flexible intergenic regions on the target genome, the value represents the percentage of the intergenic regions size subtracted or added to produce the bound of the interval. If flex-low is also present generate multiple files with flexibility values flex-low,flex-low + 10,...,flex-hight"
       )
 
 argParser :: Parser Args
@@ -179,13 +193,19 @@ argParser =
 main :: IO ()
 main = do
   args <- execParser opts
-  db <- evalRandIO . fmap (BS.unlines . fromQuadruples) $ replicateM (db_num_pairs args) (genPair args)
-  BS.writeFile (db_output args) db
+  let (names, flex_levels) = case (db_flexLevel args) of
+        Rigid args -> ([Rigid], [db_output args])
+        Flex l h ->
+          if l == h
+            then ([Flex l h], [db_output args])
+            else unzip . fmap (\f -> (Flex f f, db_output args ++ "_" ++ show f)) $ [l, l + 10 .. h]
+  dbs <- evalRandIO . fmap (map (BS.unlines . fromQuadruples) . transpose) $ replicateM (db_num_pairs args) (genPair args)
+  zipWithM_ BS.writeFile names dbs
   where
     fromQuadruples ((s1, i1, s2, i2) : ss) = s1 : i1 : s2 : i2 : fromQuadruples ss
     fromQuadruples [] = []
 
-genPair :: Args -> Rand StdGen (ByteString, ByteString, ByteString, ByteString)
+genPair :: Args -> Rand StdGen [(ByteString, ByteString, ByteString, ByteString)]
 genPair Args {..} = do
   g <- case db_par of
     (DB1 (RepDB l h d)) -> randomGenomeWithReplicas db_zeros db_size d l h db_sign
