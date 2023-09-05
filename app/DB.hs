@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TupleSections #-}
 
@@ -12,11 +13,11 @@
 -- Maintainer  : gabriel.gabrielhs@gmail.com
 module DB where
 
-import Control.Monad (replicateM)
+import Control.Monad (replicateM, zipWithM_)
 import Control.Monad.Random (Rand, StdGen, evalRandIO, getRandomR, getRandoms)
 import Data.ByteString (ByteString)
 import Data.ByteString.Char8 qualified as BS
-import Data.List (unfoldr, transpose)
+import Data.List (transpose, unfoldr)
 import Data.Set qualified as Set
 import Genomes
 import Options.Applicative
@@ -193,34 +194,44 @@ argParser =
 main :: IO ()
 main = do
   args <- execParser opts
-  let (names, flex_levels) = case (db_flexLevel args) of
-        Rigid args -> ([Rigid], [db_output args])
+  let (flex_levels, names) = case (db_flexLevel args) of
+        Rigid -> ([Rigid], [db_output args])
         Flex l h ->
           if l == h
             then ([Flex l h], [db_output args])
             else unzip . fmap (\f -> (Flex f f, db_output args ++ "_" ++ show f)) $ [l, l + 10 .. h]
-  dbs <- evalRandIO . fmap (map (BS.unlines . fromQuadruples) . transpose) $ replicateM (db_num_pairs args) (genPair args)
+  dbs <- evalRandIO . fmap (map (BS.unlines . fromQuadruples) . transpose) $ replicateM (db_num_pairs args) (genPair args flex_levels)
   zipWithM_ BS.writeFile names dbs
   where
     fromQuadruples ((s1, i1, s2, i2) : ss) = s1 : i1 : s2 : i2 : fromQuadruples ss
     fromQuadruples [] = []
 
-genPair :: Args -> Rand StdGen [(ByteString, ByteString, ByteString, ByteString)]
-genPair Args {..} = do
+genPair :: Args -> [FlexLevel] -> Rand StdGen [(ByteString, ByteString, ByteString, ByteString)]
+genPair Args {..} flex_levels = do
   g <- case db_par of
-    (DB1 (RepDB l h d)) -> randomGenomeWithReplicas db_zeros db_size d l h db_sign
+    (DB1 (RepDB rl rh d)) -> randomGenomeWithReplicas db_zeros db_size d rl rh db_sign
     (DB2 (RandDB lim)) -> randomGenome db_zeros db_size lim db_sign
   h <-
     applyIndels
       =<< if db_nop == -1
         then shuffleGenome g
         else applyOperations g
-  let (s1, i1) = writeRGenome True g
-  let (s2, i2) = case db_flexLevel of
-        Rigid -> writeRGenome True h
-        Flex l -> writeFGenome True (flexibilize l h)
-  return (s1, i1, s2, i2)
+  return $ genBS g h
   where
+    genBS g h =
+      map
+        ( \f ->
+            let (s2, i2) =
+                  ( case f of
+                      Rigid -> writeRGenome True h
+                      Flex l _ -> writeFGenome True (flexibilize l h)
+                  )
+             in (s1, i1, s2, i2)
+        )
+        flex_levels
+      where
+        (s1, i1) = writeRGenome True g
+
     r_r = (db_nop * db_porc) `div` 100
     r_t = db_nop - r_r
 
