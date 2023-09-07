@@ -69,16 +69,15 @@ approxPartition matcher g h = mkCommonPartition matcher pg ph
     pg_0 = trivialPartition g
     ph_0 = trivialPartition h
     (comps, bmg) = getConnectedComponents (mkBlockMatchGraph matcher pg_0 ph_0)
-    breakSet_0 = checkIntersections comps bmg
+    breakSet = checkIntersections comps bmg
 
-    (_, BG pg ph _, _, _) = until done (addBreaks matcher) (comps, bmg, breakSet_0, False)
-    done (_, _, _, b) = b
+    (_, BG pg ph _) = until done (addBreaks matcher breakSet) (comps, bmg)
+    done (comps', _) = countPerfect comps' == IntMap.size comps'
 
-addBreaks :: (Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> (IntMap Component, BlockMatchGraph g1 g2, Set (Gene, Gene), Bool) -> (IntMap Component, BlockMatchGraph g1 g2, Set (Gene, Gene), Bool)
-addBreaks matcher (comps, bmg@(BG pg ph corres), breakSet, _) =
-  if null notPerfs then (comps, bmg, breakSet, True) else (comps', bmg', breakSet, False)
+addBreaks :: (Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> Set (Gene, Gene) -> (IntMap Component, BlockMatchGraph g1 g2) -> (IntMap Component, BlockMatchGraph g1 g2)
+addBreaks matcher breakSet (comps, BG pg ph corres) = (comps', bmg')
   where
-    -- The substrings that may recieve a breakpoint are smallest in components that do not admit a perfect match (this ensures that they are in Tmin)
+    -- The substrings that may receive a breakpoint are smallest in components that do not admit a perfect match (this ensures that they are in Tmin)
     cand = takeWhile (\v' -> vSize (fst . head $ notPerfs) == vSize (fst v')) notPerfs
     notPerfs = filter isNotPerfect . Map.toAscList $ corres
     isNotPerfect (_, (Nothing, _)) = error patternError
@@ -137,7 +136,7 @@ getConnectedComponents (BG pg ph corres) = (comps, BG pg ph corres')
         Just _ -> (comps', corres'', comp_id)
         Nothing ->
           let (corres''', vs, cont_G, cont_H) = visitComp comp_id v (corres'', [], 0, 0)
-              perfect = testPerfectMatch corres''' vs
+              perfect = testPerfectMatch corres''' vs cont_G cont_H
               comp = Component v cont_G cont_H perfect
               comps'' = IntMap.insert comp_id comp comps'
            in (comps'', corres''', comp_id + 1)
@@ -158,19 +157,19 @@ getConnectedComponents (BG pg ph corres) = (comps, BG pg ph corres')
     -- checks if c admits a perfect match.
     -- Note that we check both directions if the blocks in G can be assigned to blocks
     -- of H and if blocks of H can be assigned to blocks of G.
-    testPerfectMatch :: Map Vertex (Maybe Int, Correspondents) -> [Vertex] -> Bool
-    testPerfectMatch aux_corres allVertices =
-      not (null hVertices) && isJust (foldrM (selectBlock Set.empty) Map.empty hVertices)
+    testPerfectMatch :: Map Vertex (Maybe Int, Correspondents) -> [Vertex] -> Int -> Int -> Bool
+    testPerfectMatch aux_corres allVertices cont_G cont_H =
+      cont_G == cont_H && not (null hVertices) && isJust (foldrM (selectBlock Set.empty) Map.empty hVertices)
       where
         -- select only vertices from H, to avoid double checking
         hVertices = filter (not . vInG) allVertices
-        -- Select block from G/H that corresponds to block represented by v.
-        -- fixCorres saves a map between blocks of G/H and their fix correspondent
-        -- in H/G.
+        -- Select block from G that corresponds to block represented by v.
+        -- fixCorres saves a map between blocks of G and their fix correspondent
+        -- in H.
         selectBlock seen v fixCorres =
-          if done then Just fixCorres' else Nothing
+          if success then Just fixCorres' else Nothing
           where
-            (_, fixCorres', done) = selectBlock' seen v fixCorres
+            (_, fixCorres', success) = selectBlock' seen v fixCorres
 
         selectBlock' seen v = testCandidates v neigs seen
           where
@@ -181,12 +180,12 @@ getConnectedComponents (BG pg ph corres) = (comps, BG pg ph corres')
           if
               | u `Set.member` seen -> testCandidates v us seen fixCorres
               | u `Map.notMember` fixCorres -> (seen', fixCorres', True)
-              | done -> (seen_rec, blocksFromG_rec', True)
+              | success -> (seen_rec, blocksFromG_rec', True)
               | otherwise -> testCandidates v us seen_rec blocksFromG_rec
           where
             seen' = Set.insert u seen
             fixCorres' = Map.insert u v fixCorres
-            (seen_rec, blocksFromG_rec, done) = selectBlock' seen' (fixCorres Map.! u) fixCorres
+            (seen_rec, blocksFromG_rec, success) = selectBlock' seen' (fixCorres Map.! u) fixCorres
             blocksFromG_rec' = Map.insert u v blocksFromG_rec
 
 -- Construct the block match graph, which is represented by an adjacency list decorated -- with information about the component (to be filled by getConnectedComponents later).
@@ -196,8 +195,6 @@ mkBlockMatchGraph matcher pg ph = BG pg ph corres
   where
     bsG = blocks pg
     bsH = blocks ph
-    acc_block_sizes :: (Genome g) => [g] -> [(g, Int)]
-    acc_block_sizes bsK = zip bsK . scanl (+) 0 . map size $ bsK
     corres = Map.fromList $ corresList bsG getCorresInH True ++ corresList bsH getCorresInG False
     getCorresInH = getCorresIn bsH (isMatch matcher) False
     getCorresInG = getCorresIn bsG (flip (isMatch matcher)) True
@@ -216,6 +213,9 @@ mkBlockMatchGraph matcher pg ph = BG pg ph corres
       [ Vtx (size sub) inG (mkIdx prev_sizes + beg)
         | end <= mkIdx (size b) && test sub (subGenome beg end b)
         ]
+
+    acc_block_sizes :: (Genome g) => [g] -> [(g, Int)]
+    acc_block_sizes bsK = zip bsK . scanl (+) 0 . map size $ bsK
 
 checkIntersections :: (Orientable g1, Orientable g2, Genome g1, Genome g2) => IntMap Component -> BlockMatchGraph g1 g2 -> Set (Gene, Gene)
 checkIntersections comps (BG pg ph corres) = do
