@@ -2,7 +2,7 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module GenomesCheck (tests, genGenome, genRGenome, rearrangeGenome, GenomeWrapper (..)) where
+module GenomesCheck (tests, genGenome, genRGenome, rearrangeGenome, rearrangeAndFlexibilizeGenome, GenomeWrapper (..)) where
 
 import Control.Monad.Random (replicateM)
 import Genomes
@@ -73,6 +73,12 @@ genFGenomeWithSign sign size_lim = do
 
 rearrangeGenome :: (RigidIntergenicGenome g) => Int -> g -> Gen g
 rearrangeGenome = applyReversals
+
+rearrangeAndFlexibilizeGenome :: Int -> GenesIRsR -> Gen GenesIRsF
+rearrangeAndFlexibilizeGenome k g = do
+  g' <- rearrangeGenome k g
+  f <- Gen.int (Range.linear 0 100)
+  return (flexibilize f g')
 
 applyReversals :: (RigidIntergenicGenome g) => Int -> g -> Gen g
 applyReversals k g =

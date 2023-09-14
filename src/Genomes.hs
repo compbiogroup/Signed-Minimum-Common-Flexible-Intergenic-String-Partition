@@ -6,6 +6,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
 
 -- |
 -- Module      : Genomes
@@ -50,10 +51,12 @@ module Genomes
     writeFGenome,
     flexibilize,
     Matcher (..),
+    FlipMatcher (..),
     RigidRigidDirectMatcher (..),
     RigidFlexibleDirectMatcher (..),
     RigidRigidReverseMatcher (..),
     RigidFlexibleReverseMatcher (..),
+    isCompatibleWithSubGenome,
     randomGenome,
     randomGenomeWithReplicas,
     shuffleGenome,
@@ -79,6 +82,7 @@ import Data.Vector.Mutable qualified as MVec
 import LocalBase
 import System.Random (Random)
 import System.Random.Shuffle (shuffleM)
+import Data.List (find)
 
 newtype Gene = Gene Int deriving newtype (Eq, Show, Read, Hashable, Ord, Num, Bounded, Enum, Random)
 
@@ -443,6 +447,8 @@ class Matcher m g1 g2 where
   isReverseMatch :: m g1 g2 -> g1 -> g2 -> Bool
   areBalanced :: m g1 g2 -> g1 -> g2 -> Bool
 
+newtype FlipMatcher m g1 g2 = FlipMatcher m
+
 data RigidRigidDirectMatcher g1 g2 = RRDM
 
 data RigidFlexibleDirectMatcher g1 g2 = RFDM
@@ -450,6 +456,12 @@ data RigidFlexibleDirectMatcher g1 g2 = RFDM
 data RigidRigidReverseMatcher g1 g2 = RRRM
 
 data RigidFlexibleReverseMatcher g1 g2 = RFRM
+
+instance (Matcher m g1 g2) => Matcher (FlipMatcher (m g1 g2)) g2 g1 where
+  isMatch (FlipMatcher matcher) g1 g2 = isMatch matcher g2 g1
+  isDirectMatch (FlipMatcher matcher) g1 g2 = isDirectMatch matcher g2 g1
+  isReverseMatch (FlipMatcher matcher) g1 g2 = isReverseMatch matcher g2 g1
+  areBalanced (FlipMatcher matcher) g1 g2 = areBalanced matcher g2 g1
 
 instance Matcher RigidRigidDirectMatcher GenesIRsR GenesIRsR where
   isMatch = isDirectMatch
@@ -491,6 +503,15 @@ instance Matcher RigidFlexibleReverseMatcher GenesIRsR GenesIRsF where
   isDirectMatch _ = isDirectMatch RFDM
   isReverseMatch _ g = isDirectMatch RFDM (intergenicFullReversal g)
   areBalanced _ = areBalanced RFDM
+
+-- | check if @g1@ is compatible with a subgenome of @g2@ and return the index
+-- of the first gene from the first compatible subgenome
+isCompatibleWithSubGenome :: (Matcher m g1 g2, Genome g1, Genome g2) => m g1 g2 -> g1 -> g2 -> Maybe Idx
+isCompatibleWithSubGenome matcher g1 g2 = find testSubgenome [1 .. mkIdx (size g2)]
+  where
+    testSubgenome beg =
+      let end = beg + mkIdx (size g1) - 1
+       in end <= mkIdx (size g2) && isMatch matcher g1 (subGenome beg end g2)
 
 randomGenome :: MonadRandom mon => Bool -> Int -> Int -> Sign -> mon GenesIRsR
 randomGenome zeros n lim signed = do

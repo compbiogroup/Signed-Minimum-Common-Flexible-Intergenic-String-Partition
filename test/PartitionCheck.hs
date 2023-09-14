@@ -10,7 +10,7 @@ import Data.List qualified as List
 import Data.Maybe (fromJust)
 import Control.Arrow (first)
 import Genomes
-import GenomesCheck (GenomeWrapper (..), genGenome, genRGenome, rearrangeGenome)
+import GenomesCheck (GenomeWrapper (..), genGenome, genRGenome, rearrangeAndFlexibilizeGenome)
 import Hedgehog
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
@@ -20,29 +20,38 @@ import PGreedy
 import PApprox
 import PFpt
 
+prop_partitionConstructionMethodsAreEquivalent :: Property
+prop_partitionConstructionMethodsAreEquivalent =
+  property $ do
+    g <- forAll (genRGenome 100)
+    bps <- forAll (Gen.subsequence [1 .. mkIdx (size g - 1)])
+    let bps' = 0 : bps ++ [mkIdx (Genomes.size g)]
+        bs = zipWith (\i succi -> subGenome (incIdx i) succi g) bps' $ tail bps'
+    assert $ mkPartitionFromBreakpoints g (EnumSet.fromList bps) == mkPartitionFromBlocks g bs
+
 prop_commonPrefixFromBothAreEqual :: Property
 prop_commonPrefixFromBothAreEqual =
   property $ do
     g <- forAll (genRGenome 100)
     k <- forAll $ Gen.int (Range.linear 0 (size g))
-    h <- forAll $ rearrangeGenome k g
+    h <- forAll $ rearrangeAndFlexibilizeGenome k g
     idx_g <- mkIdx <$> forAll (Gen.int (Range.linear 1 (size g)))
     idx_h <- forAll . fmap head . Gen.shuffle . fromJust $ geneMapLookup (getGene idx_g g) (positionMap h)
-    let ((g_beg, g_end), (h_beg, h_end)) = fromJust $ commonPrefix Nothing RRRM EnumSet.empty EnumSet.empty g h idx_g idx_h
+    let ((g_beg, g_end), (h_beg, h_end)) = fromJust $ commonPrefix Nothing RFRM EnumSet.empty EnumSet.empty g h idx_g idx_h
     subG <- forAll . return $ subGenome g_beg g_end g
     subH <- forAll . return $ subGenome h_beg h_end h
-    assert $ isMatch RRRM subG subH
+    assert $ isMatch RFRM subG subH
 
 prop_longestSubstringFromBothAreEqual :: Property
 prop_longestSubstringFromBothAreEqual =
   property $ do
     g <- forAll (genRGenome 100)
     k <- forAll $ Gen.int (Range.linear 0 (size g))
-    h <- forAll $ rearrangeGenome k g
-    let (((g_beg, g_end), (h_beg, h_end)), _, _) = fromJust $ longestSubstring Nothing RRRM EnumSet.empty EnumSet.empty g h
+    h <- forAll $ rearrangeAndFlexibilizeGenome k g
+    let (((g_beg, g_end), (h_beg, h_end)), _, _) = fromJust $ longestSubstring Nothing RFRM EnumSet.empty EnumSet.empty g h
     let subG = subGenome g_beg g_end g
         subH = subGenome h_beg h_end h
-    assert $ isMatch RRRM subG subH
+    assert $ isMatch RFRM subG subH
 
 prop_suboptimalRuleIntervalTurnsReplicasIntoSingletons :: Property
 prop_suboptimalRuleIntervalTurnsReplicasIntoSingletons = suboptimalRuleTurnsReplicasIntoSingletons suboptimalRuleInterval
@@ -50,13 +59,13 @@ prop_suboptimalRuleIntervalTurnsReplicasIntoSingletons = suboptimalRuleTurnsRepl
 prop_suboptimalRulePairsTurnsReplicasIntoSingletons :: Property
 prop_suboptimalRulePairsTurnsReplicasIntoSingletons = suboptimalRuleTurnsReplicasIntoSingletons suboptimalRulePairs
 
-suboptimalRuleTurnsReplicasIntoSingletons :: (RigidRigidReverseMatcher GenesIRsR GenesIRsR -> GenesIRsR -> GenesIRsR -> (GenesIRsR, GenesIRsR)) -> Property
+suboptimalRuleTurnsReplicasIntoSingletons :: (RigidFlexibleReverseMatcher GenesIRsR GenesIRsF -> GenesIRsR -> GenesIRsF -> (GenesIRsR, GenesIRsF)) -> Property
 suboptimalRuleTurnsReplicasIntoSingletons rule =
   property $ do
     g <- forAll (genRGenome 100)
     k <- forAll $ Gen.int (Range.linear 0 (size g))
-    h <- forAll $ rearrangeGenome k g
-    (g', h') <- forAll . return $ rule RRRM g h
+    h <- forAll $ rearrangeAndFlexibilizeGenome k g
+    (g', h') <- forAll . return $ rule RFRM g h
     let sigG = getSingletons g
         sigH = getSingletons h
         sigG' = getSingletons g'
@@ -72,14 +81,14 @@ prop_suboptimalRuleIntervalKeepBalancedGenomes = suboptimalRuleKeepBalancedGenom
 prop_suboptimalRulePairsKeepBalancedGenomes :: Property
 prop_suboptimalRulePairsKeepBalancedGenomes = suboptimalRuleKeepBalancedGenomes suboptimalRulePairs
 
-suboptimalRuleKeepBalancedGenomes :: (RigidRigidReverseMatcher GenesIRsR GenesIRsR -> GenesIRsR -> GenesIRsR -> (GenesIRsR, GenesIRsR)) -> Property
+suboptimalRuleKeepBalancedGenomes :: (RigidFlexibleReverseMatcher GenesIRsR GenesIRsF -> GenesIRsR -> GenesIRsF -> (GenesIRsR, GenesIRsF)) -> Property
 suboptimalRuleKeepBalancedGenomes rule =
   property $ do
     g <- forAll (genRGenome 100)
     k <- forAll $ Gen.int (Range.linear 0 (size g))
-    h <- forAll $ rearrangeGenome k g
-    (g', h') <- forAll . return $ rule RRRM g h
-    assert $ areBalanced RRRM g' h'
+    h <- forAll $ rearrangeAndFlexibilizeGenome k g
+    (g', h') <- forAll . return $ rule RFRM g h
+    assert $ areBalanced RFRM g' h'
 
 prop_bpsToBlockDelsIsomorphism :: Property
 prop_bpsToBlockDelsIsomorphism = property $ do
@@ -113,25 +122,25 @@ prop_approxPartitionProduceValidCorrespondence :: Property
 prop_approxPartitionProduceValidCorrespondence =
   partitionProduceValidCorrespondence approxPartition 50
 
-partitionProduceValidCorrespondence :: (RigidRigidReverseMatcher GenesIRsR GenesIRsR -> GenesIRsR -> GenesIRsR -> CommonPartition GenesIRsR GenesIRsR) -> Int -> Property
+partitionProduceValidCorrespondence :: (RigidFlexibleReverseMatcher GenesIRsR GenesIRsF -> GenesIRsR -> GenesIRsF -> CommonPartition GenesIRsR GenesIRsF) -> Int -> Property
 partitionProduceValidCorrespondence partAlg size_lim =
   property $ do
     g <- forAll (genRGenome size_lim)
     k <- forAll $ Gen.int (Range.linear 0 (size g))
-    h <- forAll $ rearrangeGenome k g
-    part <- forAll . return $ partAlg RRRM g h
-    partCombi <- forAll . return $ combine RRRM part
-    assert $ checkCommon RRRM partCombi
+    h <- forAll $ rearrangeAndFlexibilizeGenome k g
+    part <- forAll . return $ partAlg RFRM g h
+    (CGP pg ph) <- forAll . return $ combine RFRM part
+    assert $ checkCommon RFRM pg ph
 
 prop_fptPartitionProduceValidCorrespondence :: Property
 prop_fptPartitionProduceValidCorrespondence =
   property $ do
     g <- forAll (genRGenome 20)
     k <- forAll $ Gen.int (Range.linear 0 (size g))
-    h <- forAll $ rearrangeGenome k g
-    (part,_) <- fmap (first fromJust) . evalIO $ fptPartition 100000000 RRRM g h
-    partCombi <- forAll . return $ combine RRRM part
-    assert $ checkCommon RRRM partCombi
+    h <- forAll $ rearrangeAndFlexibilizeGenome k g
+    (part,_) <- fmap (first fromJust) . evalIO $ fptPartition 100000000 RFRM g h
+    (CGP pg ph) <- forAll . return $ combine RFRM part
+    assert $ checkCommon RFRM pg ph
 
 tests :: IO Bool
 tests = checkSequential $$(discover)

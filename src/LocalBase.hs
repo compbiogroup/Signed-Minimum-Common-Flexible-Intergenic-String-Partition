@@ -52,6 +52,10 @@ inputError :: String
 -- ^ ERROR message to incorrect input.
 inputError = "ERROR: Input is invalid."
 
+logicError :: String
+-- ^ ERROR message for error in the logic or implementation.
+logicError = "ERROR: There is something wrong with the algorithm or the implementation does not correspond to it."
+
 traceValue :: (Show a) => a -> a
 -- ^ trace for debug
 traceValue = traceValueS ""

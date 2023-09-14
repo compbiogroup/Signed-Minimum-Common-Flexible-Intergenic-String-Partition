@@ -29,9 +29,9 @@ import Data.Map qualified as Map
 import Data.Maybe (isJust, listToMaybe, mapMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
-import Genomes (Gene, Genome (getGene, size, subGenome), Idx, Matcher (isMatch), mkIdx)
+import Genomes (FlipMatcher (FlipMatcher), Gene, Genome (getGene, size, subGenome), Idx, Matcher (isMatch), isCompatibleWithSubGenome, mkIdx)
 import LocalBase
-import Partition (CommonPartition, Partition, blocks, breakpoints, mkCommonPartition, mkPartition, trivialPartition, underlineGenome)
+import Partition (CommonPartition, Partition, blocks, breakpoints, findUncommon, mkCommonPartition, mkPartitionFromBreakpoints, trivialPartition, underlineGenome, mkPartitionFromBlocks)
 
 type Correspondents = [Vertex]
 
@@ -64,10 +64,11 @@ countPerfect :: IntMap Component -> Int
 countPerfect = sum . map (fromEnum . cPerfect) . IntMap.elems
 
 approxPartition :: (Orientable g1, Orientable g2, Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> g1 -> g2 -> CommonPartition g1 g2
-approxPartition matcher g h = mkCommonPartition matcher pg ph
+approxPartition matcher g h = mkCommonPartition matcher pg' ph'
   where
     pg_0 = trivialPartition g
     ph_0 = trivialPartition h
+    (pg', ph') = compatibilyCompletion matcher pg ph
     (comps, bmg) = getConnectedComponents (mkBlockMatchGraph matcher pg_0 ph_0)
     breakSet = checkIntersections comps bmg
 
@@ -102,8 +103,8 @@ addBreaks matcher breakSet (comps, BG pg ph corres) = (comps', bmg')
     (comps', bmg') = getConnectedComponents (mkBlockMatchGraph matcher pg' ph')
     bg = breakpoints pg
     bh = breakpoints ph
-    pg' = mkPartition g bg'
-    ph' = mkPartition h bh'
+    pg' = mkPartitionFromBreakpoints g bg'
+    ph' = mkPartitionFromBreakpoints h bh'
     (bg', bh') =
       if vInG v
         then (EnumSet.insert break_idx bg, bh)
@@ -180,15 +181,15 @@ getConnectedComponents (BG pg ph corres) = (comps, BG pg ph corres')
           if
               | u `Set.member` seen -> testCandidates v us seen fixCorres
               | u `Map.notMember` fixCorres -> (seen', fixCorres', True)
-              | success -> (seen_rec, blocksFromG_rec', True)
-              | otherwise -> testCandidates v us seen_rec blocksFromG_rec
+              | success -> (seen_rec, fixCorres_rec', True)
+              | otherwise -> testCandidates v us seen_rec fixCorres_rec
           where
             seen' = Set.insert u seen
             fixCorres' = Map.insert u v fixCorres
-            (seen_rec, blocksFromG_rec, success) = selectBlock' seen' (fixCorres Map.! u) fixCorres
-            blocksFromG_rec' = Map.insert u v blocksFromG_rec
+            (seen_rec, fixCorres_rec, success) = selectBlock' seen' (fixCorres Map.! u) fixCorres
+            fixCorres_rec' = Map.insert u v fixCorres_rec
 
--- Construct the block match graph, which is represented by an adjacency list decorated -- with information about the component (to be filled by getConnectedComponents later).
+-- | Construct the block match graph, which is represented by an adjacency list decorated -- with information about the component (to be filled by getConnectedComponents later).
 -- As we are considering balanced genomes, we ignore subgenomes of size 1.
 mkBlockMatchGraph :: (Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> Partition g1 -> Partition g2 -> BlockMatchGraph g1 g2
 mkBlockMatchGraph matcher pg ph = BG pg ph corres
@@ -296,3 +297,35 @@ checkIntersections comps (BG pg ph corres) = do
             if vInG v
               then (getGene i g, getGene (i + 1) g)
               else (getGene i h, getGene (i + 1) h)
+
+-- | Given two partitions @pg@ and @ph@, with all components admitting a perfect matching,
+-- include the necessary breakpoints to ensure that @(pg', ph')@ is a common partition.
+compatibilyCompletion :: (Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> Partition g1 -> Partition g2 -> (Partition g1, Partition g2)
+compatibilyCompletion matcher = breakBlock
+  where
+
+    breakBlock pg ph =
+      case (findUncommon matcher pg ph, findUncommon (FlipMatcher matcher) ph pg) of
+        (Just uncommonG, _) -> breakBlock pg (mkPartitionFromBlocks h (findBreakpoint matcher uncommonG (blocks ph)))
+        (Nothing, Just uncommonH) -> breakBlock (mkPartitionFromBlocks g (findBreakpoint (FlipMatcher matcher) uncommonH (blocks pg))) ph
+        (Nothing, Nothing) -> (pg,ph)
+      where
+        g = underlineGenome pg
+        h = underlineGenome ph
+
+    findBreakpoint matcher' b1s_0 b2s_0 = findBreakpoint' b1s_0 b2s_0 []
+      where
+        findBreakpoint' _ [] _ = error logicError
+        findBreakpoint' [] (b2 : b2s) b2s' = findBreakpoint' b1s_0 b2s (b2 : b2s')
+        findBreakpoint' (b1 : b1s) (b2 : b2s) b2s' =
+          if size b1 >= size b2
+            then findBreakpoint' b1s_0 b2s (b2 : b2s')
+            else case isCompatibleWithSubGenome matcher' b1 b2 of
+              Nothing -> findBreakpoint' b1s (b2 : b2s) b2s'
+              Just i ->
+                let new_bs =
+                      if
+                          | i == 1 -> [subGenome 1 (mkIdx (size b1)) b2, subGenome (mkIdx (size b1) + 1) (mkIdx (size b2)) b2]
+                          | i + mkIdx (size b1) - 1 == mkIdx (size b2) -> [subGenome 1 (i-1) b2, subGenome i (mkIdx (size b2)) b2]
+                          | otherwise -> [subGenome 1 (i-1) b2, subGenome i (i + mkIdx (size b1) - 1) b2, subGenome (i + mkIdx (size b1)) (mkIdx (size b2)) b2]
+                 in reverse b2s' ++ new_bs ++ b2s
