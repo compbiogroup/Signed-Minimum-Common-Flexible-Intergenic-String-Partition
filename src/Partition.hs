@@ -99,12 +99,12 @@ mkCommonPartition matcher pg ph =
 
 -- | Verify if the elements of pg can be assign to elements of ph with a perfect
 -- match.
-checkCommon :: (Matcher m g1 g2) => m g1 g2 -> Partition g1 -> Partition g2 -> Bool
+checkCommon :: (Matcher m g1 g2, Genome g1) => m g1 g2 -> Partition g1 -> Partition g2 -> Bool
 checkCommon matcher pg ph = Partition.size pg == Partition.size ph && isNothing (findUncommon matcher pg ph)
 
 -- | Find largest blocks that do not have sufficient correspondences between one partition and the other
 -- match.
-findUncommon :: (Matcher m g1 g2) => m g1 g2 -> Partition g1 -> Partition g2 -> Maybe [g1]
+findUncommon :: (Matcher m g1 g2, Genome g1) => m g1 g2 -> Partition g1 -> Partition g2 -> Maybe [g1]
 findUncommon matcher pg ph =
   case testPerfectMatch of
     Left (i, fixCorres) -> Just ((bsG !! i) : map ((bsG !!) . (fixCorres Map.!)) (cors !! i))
@@ -113,8 +113,11 @@ findUncommon matcher pg ph =
     bsG = blocks pg
     cors = getBlocksCorrespondence_ matcher pg ph
 
-    testPerfectMatch = foldrM (selectBlock Set.empty) Map.empty [0 .. length cors - 1]
+    testPerfectMatch = foldrM (selectBlock Set.empty) Map.empty block_indices
       where
+        -- Block indices sorted by block size in decreasing order
+        block_indices = map snd . sortWith (negate . fst) $ zip (map Genomes.size bsG) [0 .. length cors - 1]
+
         -- Select block from ph that corresponds to block in position i of pg.
         -- fixCorres saves with blocks of pg are fixed in which blocks of ph (indices starting in 0).
         selectBlock seen i fixCorres =
