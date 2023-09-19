@@ -11,6 +11,7 @@
 -- Maintainer  : gabriel.gabrielhs@gmail.com
 module PApprox
   ( approxPartition,
+    approxLowerBound,
     countPerfect,
     getConnectedComponents,
     mkBlockMatchGraph,
@@ -23,16 +24,17 @@ import Data.EnumSet qualified as EnumSet
 import Data.Foldable (foldrM)
 import Data.IntMap (IntMap)
 import Data.IntMap qualified as IntMap
+import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
 import Data.Map (Map)
 import Data.Map qualified as Map
 import Data.Maybe (isJust, listToMaybe, mapMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
+import Data.Tuple (swap)
 import Genomes (FlipMatcher (FlipMatcher), Gene, Genome (getGene, size, subGenome), Idx, Matcher (isMatch), isCompatibleWithSubGenome, mkIdx)
 import LocalBase
 import Partition (CommonPartition, Partition, blocks, breakpoints, findUncommon, mkCommonPartition, mkPartitionFromBlocks, mkPartitionFromBreakpoints, trivialPartition, underlineGenome)
-import Data.Tuple (swap)
 
 type Correspondents = [Vertex]
 
@@ -71,10 +73,18 @@ approxPartition matcher g h = mkCommonPartition matcher pg' ph'
     ph_0 = trivialPartition h
     (pg', ph') = compatibilyCompletion matcher pg ph
     (comps, bmg) = getConnectedComponents (mkBlockMatchGraph matcher pg_0 ph_0)
-    breakSet = checkIntersections comps bmg
+    (breakSet, _) = checkIntersections comps bmg
 
     (_, BG pg ph _) = until done (addBreaks matcher breakSet) (comps, bmg)
     done (comps', _) = countPerfect comps' == IntMap.size comps'
+
+approxLowerBound :: (Orientable g1, Orientable g2, Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> g1 -> g2 -> Int
+approxLowerBound matcher g h = lb
+  where
+    pg_0 = trivialPartition g
+    ph_0 = trivialPartition h
+    (comps, bmg) = getConnectedComponents (mkBlockMatchGraph matcher pg_0 ph_0)
+    (_, lb) = checkIntersections comps bmg
 
 addBreaks :: (Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> Set (Gene, Gene) -> (IntMap Component, BlockMatchGraph g1 g2) -> (IntMap Component, BlockMatchGraph g1 g2)
 addBreaks matcher breakSet (comps, BG pg ph corres) = (comps', bmg')
@@ -219,27 +229,36 @@ mkBlockMatchGraph matcher pg ph = BG pg ph corres
     acc_block_sizes :: (Genome g) => [g] -> [(g, Int)]
     acc_block_sizes bsK = zip bsK . scanl (+) 0 . map size $ bsK
 
-checkIntersections :: (Orientable g1, Orientable g2, Genome g1, Genome g2) => IntMap Component -> BlockMatchGraph g1 g2 -> Set (Gene, Gene)
-checkIntersections comps (BG pg ph corres) = do
-  interMapToBreakSet . foldr updateInterMap interMap_0 $ vertexPairsTmin
+-- | Given a set of components and a block match graph, returns a set of breakpoints to be included on the genomes to produce the partitions and
+-- a lower bound on the number of breakpoints that are really necessary in a minimum common partition between the genomes.
+checkIntersections :: (Orientable g1, Orientable g2, Genome g1, Genome g2) => IntMap Component -> BlockMatchGraph g1 g2 -> (Set (Gene, Gene), Int)
+checkIntersections comps (BG pg ph corres) = (Set.unions [breakSet_i, breakSet_ii, breakSet_iii], Set.size breakSet_i + Set.size breakSet_ii + Set.size breakSet_iii `div` 2)
   where
     g = underlineGenome pg
     h = underlineGenome ph
+
+    -- case i: components of tmin that do not have intersections with the others
+    -- case ii: components of tmin that with at least of ir that intersect all intersection components
+    -- case iii: other components of tmin, must intersect all intersection components in one of two breakpoints (extremes of the subgenomes)
+    (cases_i, cases_ii, cases_iii) = foldr separetInterCases ([], [], []) $ IntSet.toList tminSet
+    breakSet_i = foldr addBreaks_i Set.empty cases_i
+    (breakSet_ii, remaining_cases_iii) = snd $ until (IntSet.null . fst) addBreaks_ii (IntSet.fromList cases_ii, (Set.empty, IntSet.fromList cases_iii))
+    breakSet_iii = snd $ until (IntSet.null . fst) addBreaks_iii (remaining_cases_iii, Set.empty)
 
     -- Vertices from components that do not admit a perfect match
     notPerfs = filter (\(_, c) -> not . cPerfect $ comps IntMap.! c) . map getComp . Map.toAscList $ corres
     vertexPairsNotPerfs = [(v_cv, u_cu) | v_cv <- notPerfs, u_cu <- notPerfs]
     getComp (_, (Nothing, _)) = error patternError
     getComp (v, (Just c, _)) = (v, c)
-    -- Vertices from components of Tmin
-    tmin = filter (\(_, c) -> c `IntSet.member` tminSet) notPerfs
+
+    -- Vertices from components of Tmin (minimal components without perfect matching)
+    tminVtxs = filter (\(_, c) -> c `IntSet.member` tminSet) notPerfs
     -- We ensure in these pairs that v starts before u
-    vertexPairsTmin = [((v, cv), (u, cu)) | (v, cv) <- tmin, (u, cu) <- tmin, vIdx v < vIdx u]
+    vertexPairsTmin = [((v, cv), (u, cu)) | (v, cv) <- tminVtxs, (u, cu) <- tminVtxs, vIdx v < vIdx u]
     tminSet = foldr selectTmin (IntSet.fromList (map snd notPerfs)) vertexPairsNotPerfs
 
-    interMap_0 :: IntMap (Maybe Idx, Maybe Idx)
-    interMap_0 = IntMap.fromAscList . map (,(Nothing, Nothing)) . IntSet.toAscList $ tminSet
-
+    -- Starting from a set with all vertices from components without perfect matching,
+    -- delete the vertices with components containing subcomponents without perfect matching
     selectTmin ((v, cv), (u, cu)) tminSet_aux =
       if
           | cv == cu || vInG v /= vInG u -> tminSet_aux
@@ -247,57 +266,89 @@ checkIntersections comps (BG pg ph corres) = do
           | (vBeg u <= vBeg v && vEnd v <= vEnd u) -> IntSet.delete cu tminSet_aux
           | otherwise -> tminSet_aux
 
-    updateInterMap :: ((Vertex, Int), (Vertex, Int)) -> IntMap (Maybe Idx, Maybe Idx) -> IntMap (Maybe Idx, Maybe Idx)
-    updateInterMap ((v, cv), (u, cu)) interMap =
+    -- For each component, the intersection Map stores the smallest size of the intersection
+    -- between components on the left (lv) and on the right (rv), and the set of components
+    -- that intersect it.
+    interMap :: IntMap ((Maybe Idx, Maybe Idx), IntSet)
+    interMap = foldr updateInterMap interMap_0 vertexPairsTmin
+    interMap_0 = IntMap.fromAscList . map (,((Nothing, Nothing), IntSet.empty)) . IntSet.toAscList $ tminSet
+
+    updateInterMap :: ((Vertex, Int), (Vertex, Int)) -> IntMap ((Maybe Idx, Maybe Idx), IntSet) -> IntMap ((Maybe Idx, Maybe Idx), IntSet)
+    updateInterMap ((v, cv), (u, cu)) interMap_aux =
       if cv == cu || vInG v /= vInG u || vEnd v <= vBeg u
-        then interMap -- Ignore cases where both vertices are in the same component or if there is no intersection
+        then -- Ignore cases where both vertices are in the same component or if there is no intersection
+        -- (Note that we already have vIdx v < vIdx u from the creation of vertexPairsTmin)
+          interMap_aux
         else
-          let interMap_up1 = updateEntry cu (vOri u) lu ru lu (Just $ vEnd u - vEnd v + 1) interMap
-           in updateEntry cv (vOri v) lv rv (Just $ vBeg u - vBeg v + 1) rv interMap_up1
+          let interMap_up1 = updateEntry cu cv (vOri u) lu ru interSize ru interMap_aux
+           in updateEntry cv cu (vOri v) lv rv lv interSize interMap_up1
       where
-        -- For each component, the maps stores the smallest size of the intersection
-        -- between components on the left (lv) and on the right (rv)
-        (lv, rv) = interMap IntMap.! cv
-        (lu, ru) = interMap IntMap.! cu
+        interSize = Just $ vEnd v - vBeg u + 1
+        (lv, rv) = fst $ interMap_aux IntMap.! cv
+        (lu, ru) = fst $ interMap_aux IntMap.! cu
         vOri v' =
           if vInG v'
             then getOri (subGenome (vBeg v') (vEnd v') g)
             else getOri (subGenome (vBeg v') (vEnd v') h)
 
         -- update the intersection map taking into account that blocks of a component -- may be inverted
-        updateEntry c' ori l_old r_old l_new r_new interMap' =
+        updateEntry c' c'' ori l_old r_old l_new r_new interMap_aux' =
           if ori == vOri v'
-            then IntMap.insert c' (select l_old l_new, select r_old r_new) interMap'
-            else IntMap.insert c' (select l_old r_new, select r_old l_new) interMap'
+            then IntMap.insert c' ((select l_old l_new, select r_old r_new), IntSet.insert c'' inter) interMap_aux'
+            else IntMap.insert c' ((select l_old r_new, select r_old l_new), IntSet.insert c'' inter) interMap_aux'
           where
             v' = cVtx $ comps IntMap.! c'
             select old new = min <$> old <*> new <|> old <|> new
+            inter = snd $ interMap_aux' IntMap.! c'
 
-    interMapToBreakSet :: IntMap (Maybe Idx, Maybe Idx) -> Set (Gene, Gene)
-    interMapToBreakSet = foldr chooseBreak Set.empty . IntMap.toList
-
-    chooseBreak :: (Int, (Maybe Idx, Maybe Idx)) -> Set (Gene, Gene) -> Set (Gene, Gene)
-    chooseBreak (c, lr) breakSet =
-      case lr of
-        (Nothing, Nothing) -> Set.insert (getGenePair (vBeg v)) breakSet
-        (Just l, Nothing) -> Set.insert (getGenePair (vBeg v + l - 2)) breakSet
-        (Nothing, Just r) -> Set.insert (getGenePair (vEnd v - r + 1)) breakSet
+    -- separate connected components of tmin into the three intersection cases
+    separetInterCases :: Int -> ([Int], [Int], [Int]) -> ([Int], [Int], [Int])
+    separetInterCases c (cs1, cs2, cs3) =
+      case fst (interMap IntMap.! c) of
+        (Nothing, Nothing) -> (c : cs1, cs2, cs3)
+        (Just _, Nothing) -> (cs1, c : cs2, cs3)
+        (Nothing, Just _) -> (cs1, c : cs2, cs3)
         (Just l, Just r) ->
-          let l_inter = vBeg v + l - 1
+          let v = cVtx $ comps IntMap.! c
+              l_inter = vBeg v + l - 1
               r_inter = vEnd v - r + 1
            in if l_inter > r_inter
-                then Set.insert (getGenePair r_inter) breakSet
-                else
-                  Set.insert
-                    (getGenePair $ vBeg v)
-                    (Set.insert (getGenePair (vEnd v - 1)) breakSet)
+                then (cs1, c : cs2, cs3)
+                else (cs1, cs2, c : cs3)
+
+    -- In case i, we can add the breakpoint in any position of the subgenomes
+    addBreaks_i :: Int -> Set (Gene, Gene) -> Set (Gene, Gene)
+    addBreaks_i c = Set.insert (getGenePair (vBeg v) (vInG v))
       where
         v = cVtx $ comps IntMap.! c
-        getGenePair i =
-          canonicOri *** canonicOri $
-            if vInG v
-              then (getGene i g, getGene (i + 1) g)
-              else (getGene i h, getGene (i + 1) h)
+
+    -- In case ii, for a component c, we add a breakpoint in the intersection off all component intersecting c and update the set of remaining components of tmin
+    addBreaks_ii :: (IntSet, (Set (Gene, Gene), IntSet)) -> (IntSet, (Set (Gene, Gene), IntSet))
+    addBreaks_ii (cs2, (breakSet, cs3)) = (cs2', (breakSet', cs3'))
+      where
+        breakSet' = case fst (interMap IntMap.! c) of
+          (Nothing, Nothing) -> error patternError
+          (Just l, Nothing) -> Set.insert (getGenePair (vBeg v + l - 2) (vInG v)) breakSet
+          (_, Just r) -> Set.insert (getGenePair (vEnd v - r + 1) (vInG v)) breakSet
+        v = cVtx $ comps IntMap.! c
+        c = head $ IntSet.elems cs2
+        cs2' = IntSet.delete c cs2 IntSet.\\ snd (interMap IntMap.! c)
+        cs3' = IntSet.delete c cs3 IntSet.\\ snd (interMap IntMap.! c)
+
+    -- In case iii, for a component c, we add two breakpoints, such that each component intersecting c will have one of them.
+    addBreaks_iii :: (IntSet, Set (Gene, Gene)) -> (IntSet, Set (Gene, Gene))
+    addBreaks_iii (cs, breakSet) = (cs', breakSet')
+      where
+        breakSet' = Set.insert (getGenePair (vBeg v) (vInG v)) (Set.insert (getGenePair (vEnd v - 1) (vInG v)) breakSet)
+        v = cVtx $ comps IntMap.! c
+        c = head $ IntSet.elems cs
+        cs' = IntSet.delete c cs IntSet.\\ snd (interMap IntMap.! c)
+
+    getGenePair i inG =
+      canonicOri *** canonicOri $
+        if inG
+          then (getGene i g, getGene (i + 1) g)
+          else (getGene i h, getGene (i + 1) h)
 
 -- | Given two partitions @pg@ and @ph@, with all components admitting a perfect matching,
 -- include the necessary breakpoints to ensure that @(pg', ph')@ is a common partition.

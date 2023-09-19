@@ -16,15 +16,15 @@ import Data.ByteString.Builder (intDec, toLazyByteString)
 import Data.ByteString.Char8 qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Time (diffUTCTime, getCurrentTime)
-import Genomes (RigidFlexibleReverseMatcher (..), Sign (..), readFGenome, readRGenome, GenesIRsR, GenesIRsF)
+import Genomes (GenesIRsF, GenesIRsR, RigidFlexibleReverseMatcher (..), Sign (..), readFGenome, readRGenome)
 import LocalBase
 import Options.Applicative
-import Partition (getBlocksCorrespondence, writePartition, CommonPartition)
-import Text.Printf (printf)
-import PSOAR (soarPartition)
-import PGreedy (greedyPartition)
-import PApprox (approxPartition)
+import PApprox (approxPartition, approxLowerBound)
 import PFpt (fptPartition)
+import PGreedy (greedyPartition)
+import PSOAR (soarPartition)
+import Partition (CommonPartition, getBlocksCorrespondence, writePartition)
+import Text.Printf (printf)
 
 data Args = Args
   { partAlg :: PartitionAlgorithm,
@@ -34,16 +34,17 @@ data Args = Args
     signed :: Sign
   }
 
-data PartitionAlgorithm = SOAR | SOARComb | Greedy | GreedySin | Approx | FPT deriving (Read, Show)
+data PartitionAlgorithm = SOAR | SOARComb | Greedy | GreedySin | Approx | FPT | ApproxLB deriving (Read, Show)
 
 argsParser :: Parser Args
 argsParser =
   Args
-    <$> option auto
+    <$> option
+      auto
       ( long "algorithm"
           <> short 'a'
           <> metavar "ALGO"
-          <> help "Algorithm to use for the partition problem. The options are SOAR, Greedy, Approx, and Ppt."
+          <> help "Algorithm to use for the partition problem. The options are SOAR, Greedy, GreedySin, Approx, and FPT (there is also and ApproxLB option, which produces and integer corresponding to a lower bound of the common partition size instead of a partition on the output)."
       )
     <*> strOption
       ( long "input"
@@ -101,14 +102,17 @@ main = do
     toQuadruples _ = error "Incorrect number of lines."
 
 produceBlockMatch :: PartitionAlgorithm -> Sign -> (BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString) -> IO [BS.ByteString]
-produceBlockMatch alg sign (s1, i1, s2, i2) = do
-  (maybe_part, fullComp) <- getPartition alg g h
-  case maybe_part of
-    Nothing -> if fullComp then return ["# Error: Execution finish but no partition was found"] else return ["# No solution found in time"]
-    Just part ->
-      let (s1', i1', s2', i2') = writePartition part
-          bc = writeBlocksCorrespondence $ getBlocksCorrespondence RFRM part
-      in return [s1', i1', s2', i2', bc, if fullComp then "# Exact solution" else "# Partial solution"]
+produceBlockMatch alg sign (s1, i1, s2, i2) =
+  case alg of
+    ApproxLB -> return [BS.pack . show $ approxLowerBound RFRM g h]
+    _ -> do
+      (maybe_part, fullComp) <- getPartition alg g h
+      case maybe_part of
+        Nothing -> if fullComp then return ["# Error: Execution finish but no partition was found"] else return ["# No solution found in time"]
+        Just part ->
+          let (s1', i1', s2', i2') = writePartition part
+              bc = writeBlocksCorrespondence $ getBlocksCorrespondence RFRM part
+           in return [s1', i1', s2', i2', bc, if fullComp then "# Exact solution" else "# Partial solution"]
   where
     g = readRGenome True sign s1 i1
     h = readFGenome True sign s2 i2
@@ -123,3 +127,4 @@ getPartition SOARComb g h = return . (,True) . Just $ soarPartition True RFRM g 
 getPartition Greedy g h = return . (,True) . Just $ greedyPartition False RFRM g h
 getPartition GreedySin g h = return . (,True) . Just $ greedyPartition True RFRM g h
 getPartition Approx g h = return . (,True) . Just $ approxPartition RFRM g h
+getPartition _ _ _ = error patternError
