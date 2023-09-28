@@ -44,7 +44,7 @@ argsParser =
       ( long "algorithm"
           <> short 'a'
           <> metavar "ALGO"
-          <> help "Algorithm to use for the partition problem. The options are SOAR, Greedy, GreedySin, Approx, and FPT (there is also and ApproxLB option, which produces and integer corresponding to a lower bound of the common partition size instead of a partition on the output)."
+          <> help "Algorithm to use for the partition problem. The options are SOAR, Greedy, GreedySin, Approx, and FPT. There is also and ApproxLB option, which produces and integer corresponding to a lower bound of the number of breakpoints in the common partition (counting both partitions) instead of a partition on the output."
       )
     <*> strOption
       ( long "input"
