@@ -31,7 +31,6 @@ import Data.Map qualified as Map
 import Data.Maybe (isJust, listToMaybe, mapMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
-import Data.Tuple (swap)
 import Genomes (FlipMatcher (FlipMatcher), Gene, Genome (getGene, size, subGenome), Idx, Matcher (isDirectMatch, isMatch), isCompatibleWithSubGenome, mkIdx)
 import LocalBase
 import Partition (CommonPartition, Partition, blocks, breakpoints, findUncommon, mkCommonPartition, mkPartitionFromBlocks, mkPartitionFromBreakpoints, trivialPartition, underlineGenome)
@@ -67,16 +66,21 @@ countPerfect :: IntMap Component -> Int
 countPerfect = sum . map (fromEnum . cPerfect) . IntMap.elems
 
 approxPartition :: (Orientable g1, Orientable g2, Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> g1 -> g2 -> CommonPartition g1 g2
-approxPartition matcher g h = mkCommonPartition matcher pg' ph'
+approxPartition matcher g h = mkCommonPartition matcher pg'' ph''
   where
     pg_0 = trivialPartition g
     ph_0 = trivialPartition h
-    (pg', ph') = compatibilyCompletion matcher pg ph
-    (comps, bmg) = getConnectedComponents (mkBlockMatchGraph matcher pg_0 ph_0)
-    (breakSet, _) = checkIntersections comps bmg
 
-    (_, BG pg ph _) = until done (addBreaks matcher breakSet) (comps, bmg)
-    done (comps', _) = countPerfect comps' == IntMap.size comps'
+    (pg'', ph'', _, _) = until done2 tryToBuildPartition (pg_0, ph_0, Nothing, False)
+    tryToBuildPartition (pg, ph, maybe_breakSet, _) = compatibilyCompletion matcher pg' ph' breakSet
+      where
+        (_, BG pg' ph' _) = until done1 (addBreaks matcher breakSet) (comps, bmg)
+        done1 (comps', _) = countPerfect comps' == IntMap.size comps'
+        (comps, bmg) = getConnectedComponents (mkBlockMatchGraph matcher pg ph)
+        breakSet = case maybe_breakSet of
+          Just bs -> bs
+          Nothing -> fst $ checkIntersections comps bmg
+    done2 (_, _, _, isCommon) = isCommon
 
 approxLowerBound :: (Orientable g1, Orientable g2, Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> g1 -> g2 -> Int
 approxLowerBound matcher g h = lb
@@ -86,6 +90,7 @@ approxLowerBound matcher g h = lb
     (comps, bmg) = getConnectedComponents (mkBlockMatchGraph matcher pg_0 ph_0)
     (_, lb) = checkIntersections comps bmg
 
+-- Add breakpoints in some subgenome from Tmin
 addBreaks :: (Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> Set (Gene, Gene) -> (IntMap Component, BlockMatchGraph g1 g2) -> (IntMap Component, BlockMatchGraph g1 g2)
 addBreaks matcher breakSet (comps, BG pg ph corres) = (comps', bmg')
   where
@@ -351,27 +356,41 @@ checkIntersections comps (BG pg ph corres) = (Set.unions [breakSet_i, breakSet_i
           else (getGene i h, getGene (i + 1) h)
 
 -- | Given two partitions @pg@ and @ph@, with all components admitting a perfect matching,
--- include the necessary breakpoints to ensure that the pair is a common partition.
-compatibilyCompletion :: (Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> Partition g1 -> Partition g2 -> (Partition g1, Partition g2)
-compatibilyCompletion matcher = curry breakBlock
+-- find unmatched blocks and add breakpoints to produce new matches. This function may return
+-- partitions still incomplete if some of the matchings are no longer perfect (the boolean in
+-- the result is False in this case).
+compatibilyCompletion :: (Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> Partition g1 -> Partition g2 -> Set (Gene, Gene) -> (Partition g1, Partition g2, Maybe (Set (Gene, Gene)), Bool)
+compatibilyCompletion matcher pg_0 ph_0 breakSet_0 = breakBlock (pg_0, ph_0, breakSet_0)
   where
-    breakBlock (pg, ph) =
+    -- Find blocks without matches and black bigger blocks to free their matches
+    breakBlock (pg, ph, breakSet) =
       case (findUncommon matcher pg ph, findUncommon (FlipMatcher matcher) ph pg) of
-        (Just uncommonG, _) -> breakBlock (findBreakpoint matcher uncommonG pg ph)
-        (Nothing, Just uncommonH) -> breakBlock (swap (findBreakpoint (FlipMatcher matcher) uncommonH ph pg))
-        (Nothing, Nothing) -> (pg, ph)
+        (Just uncommonG, _) ->
+          maybe
+            (pg, ph, Just breakSet, False)
+            breakBlock
+            (findBreakpoint matcher breakSet uncommonG pg ph)
+        (Nothing, Just uncommonH) ->
+          case findBreakpoint (FlipMatcher matcher) breakSet uncommonH ph pg of
+            Nothing -> (pg, ph, Just breakSet, False)
+            Just (a, b, c) -> breakBlock (b, a, c)
+        (Nothing, Nothing) -> (pg, ph, Just breakSet_0, True)
 
-    findBreakpoint matcher' uncommon p1 p2 = (p1', p2')
+    findBreakpoint matcher' breakSet uncommon p1 p2 =
+      case findBreakpoint' uncommon b2s_0 [] of
+        Nothing -> Nothing
+        Just (breakInfo, new_b2s, new_breaks) ->
+          let new_b1s = findBreakpoint'' breakInfo b1s_0 []
+              p1' = mkPartitionFromBlocks (underlineGenome p1) new_b1s
+              p2' = mkPartitionFromBlocks (underlineGenome p2) new_b2s
+              breakSet' = Set.union breakSet (Set.fromList new_breaks)
+           in Just (p1', p2', breakSet')
       where
-        p1' = mkPartitionFromBlocks (underlineGenome p1) new_b1s
-        p2' = mkPartitionFromBlocks (underlineGenome p2) new_b2s
         b1s_0 = blocks p1
         b2s_0 = blocks p2
-        (old_b2, new_b, new_b2s, bp_idx) = findBreakpoint' uncommon b2s_0 []
-        new_b1s = findBreakpoint'' b1s_0 []
 
         -- find block of p2 that contains a substring compatible with a block of uncommon
-        findBreakpoint' _ [] _ = error logicError
+        findBreakpoint' _ [] _ = Nothing
         findBreakpoint' [] (b2 : b2s) b2s' = findBreakpoint' uncommon b2s (b2 : b2s')
         findBreakpoint' (u : us) (b2 : b2s) b2s' =
           if size u >= size b2
@@ -380,24 +399,27 @@ compatibilyCompletion matcher = curry breakBlock
               Nothing -> findBreakpoint' us (b2 : b2s) b2s'
               Just i ->
                 let b' = subGenome i (i + mkIdx (size u) - 1) b2
-                    new_bs =
+                    getGenePair i_ = canonicOri *** canonicOri $ (getGene i_ b2, getGene (i_ + 1) b2)
+                    (new_bs, new_breaks) =
                       if
-                          | i == 1 -> [b', subGenome (mkIdx (size u) + 1) (mkIdx (size b2)) b2]
-                          | i + mkIdx (size u) - 1 == mkIdx (size b2) -> [subGenome 1 (i - 1) b2, b']
-                          | otherwise -> [subGenome 1 (i - 1) b2, b', subGenome (i + mkIdx (size u)) (mkIdx (size b2)) b2]
-                 in (b2, b', reverse b2s' ++ new_bs ++ b2s, i)
+                          | i == 1 -> ([b', subGenome (mkIdx (size u) + 1) (mkIdx (size b2)) b2], [getGenePair (mkIdx (size u))])
+                          | i + mkIdx (size u) - 1 == mkIdx (size b2) -> ([subGenome 1 (i - 1) b2, b'], [getGenePair (i - 1)])
+                          | otherwise -> ([subGenome 1 (i - 1) b2, b', subGenome (i + mkIdx (size u)) (mkIdx (size b2)) b2], [getGenePair (i - 1), getGenePair (i + mkIdx (size u) - 1)])
+                 in Just ((b2, b', i), reverse b2s' ++ new_bs ++ b2s, new_breaks)
 
         -- find block of p1 that is compatible with the broken block b2 from p2
-        findBreakpoint'' [] _ = error logicError
-        findBreakpoint'' (b1 : b1s) b1s' =
-          if size b1 /= size old_b2 || not (isMatch matcher' b1 old_b2)
-            then findBreakpoint'' b1s (b1 : b1s')
-            else
-              let i = if isDirectMatch matcher' b1 old_b2 then bp_idx else mkIdx (size b1) - bp_idx + 1
-               in let b' = subGenome i (i + mkIdx (size new_b) - 1) b1
-                      new_bs =
-                        if
-                            | i == 1 -> [b', subGenome (mkIdx (size new_b) + 1) (mkIdx (size b1)) b1]
-                            | i + mkIdx (size new_b) - 1 == mkIdx (size b1) -> [subGenome 1 (i - 1) b1, b']
-                            | otherwise -> [subGenome 1 (i - 1) b1, b', subGenome (i + mkIdx (size new_b)) (mkIdx (size b1)) b1]
-                   in reverse b1s' ++ new_bs ++ b1s
+        findBreakpoint'' (old_b2, new_b, bp_idx) = findBreakpoint''_
+          where
+            findBreakpoint''_ [] _ = error logicError
+            findBreakpoint''_ (b1 : b1s) b1s' =
+              if size b1 /= size old_b2 || not (isMatch matcher' b1 old_b2)
+                then findBreakpoint''_ b1s (b1 : b1s')
+                else
+                  let i = if isDirectMatch matcher' b1 old_b2 then bp_idx else mkIdx (size b1) - bp_idx + 1 - mkIdx (size new_b) + 1
+                   in let b' = subGenome i (i + mkIdx (size new_b) - 1) b1
+                          new_bs =
+                            if
+                                | i == 1 -> [b', subGenome (mkIdx (size new_b) + 1) (mkIdx (size b1)) b1]
+                                | i + mkIdx (size new_b) - 1 == mkIdx (size b1) -> [subGenome 1 (i - 1) b1, b']
+                                | otherwise -> [subGenome 1 (i - 1) b1, b', subGenome (i + mkIdx (size new_b)) (mkIdx (size b1)) b1]
+                       in reverse b1s' ++ new_bs ++ b1s
