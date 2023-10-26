@@ -83,10 +83,13 @@ longestSubstring maybe_singleton matcher genesOnBlocksG genesOnBlocksH g h =
 commonPrefix :: (Matcher m g1 g2, Genome g1, Genome g2) => Maybe Gene -> m g1 g2 -> EnumSet Idx -> EnumSet Idx -> g1 -> g2 -> Idx -> Idx -> Maybe ((Idx, Idx), (Idx, Idx))
 -- find common prefix of subgenome of g starting with ig
 -- and subgenome of h starting with ih
+-- or if the elements is ig and ih are a reversed match
+-- find common prefix of subgenome of g starting with ig
+-- and subgenome of rev(h) starting with ih
 -- returns Nothing if the prefix is empty
 -- returns indices for the ends of both subgenomes otherwise
 commonPrefix maybe_singleton matcher genesOnBlocksG genesOnBlocksH g h ig ih = do
-  (endCPG, endCPH) <-
+  (endCPG, endCPH, rev) <-
     if
         | isDirectMatch matcher (subGenome ig ig g) (subGenome ih ih h) -> Just $ commonPrefix' False ig ih
         | isReverseMatch matcher (subGenome ig ig g) (subGenome ih ih h) -> Just $ commonPrefix' True ig ih
@@ -94,20 +97,21 @@ commonPrefix maybe_singleton matcher genesOnBlocksG genesOnBlocksH g h ig ih = d
   case maybe_singleton of
     Just singleton ->
       if singleton `isGene` subGenome ig endCPG g
-        then return ((ig, endCPG), (ih, endCPH))
+        then return ((ig, endCPG), if rev then (endCPH, ih) else (ih, endCPH))
         else Nothing
-    Nothing -> return ((ig, endCPG), (ih, endCPH))
+    Nothing -> return ((ig, endCPG), if rev then (endCPH, ih) else (ih, endCPH))
   where
-    commonPrefix' :: Bool -> Idx -> Idx -> (Idx, Idx)
+    commonPrefix' :: Bool -> Idx -> Idx -> (Idx, Idx, Bool)
     commonPrefix' rev jg jh =
       if
-          | jg == mkIdx (size g) -> (jg, jh)
-          | jh == mkIdx (size h) -> (jg, jh)
-          | jg' `EnumSet.member` genesOnBlocksG -> (jg, jh)
-          | jh' `EnumSet.member` genesOnBlocksH -> (jg, jh)
-          | not (testMatch matcher (subGenome jg jg' g) (subGenome jh jh' h)) -> (jg, jh)
+          | jg == mkIdx (size g) -> (jg, jh, rev)
+          | jh_end > mkIdx (size h) -> (jg, jh, rev)
+          | jh_beg < 0 -> (jg, jh, rev)
+          | jg' `EnumSet.member` genesOnBlocksG -> (jg, jh, rev)
+          | jh' `EnumSet.member` genesOnBlocksH -> (jg, jh, rev)
+          | not (testMatch matcher (subGenome jg jg' g) (subGenome jh_beg jh_end h)) -> (jg, jh, rev)
           | otherwise -> commonPrefix' rev jg' jh'
       where
         jg' = incIdx jg
-        jh' = incIdx jh
+        (jh_beg, jh_end, jh') = if rev then (decIdx jh, jh, decIdx jh) else (jh, incIdx jh, incIdx jh)
         testMatch = if rev then isReverseMatch else isDirectMatch
