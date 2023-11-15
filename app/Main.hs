@@ -12,6 +12,7 @@
 module Main (main) where
 
 import Control.Concurrent.ParallelIO.Global (parallel_, stopGlobalPool)
+import Control.DeepSeq (force)
 import Data.ByteString.Builder (intDec, toLazyByteString)
 import Data.ByteString.Char8 qualified as BS
 import Data.ByteString.Lazy qualified as LBS
@@ -92,7 +93,7 @@ main = do
   where
     runOne args (i, bstrs) = do
       start <- getCurrentTime
-      !bstrs' <- produceBlockMatch (partAlg args) (signed args) bstrs
+      !bstrs' <- fmap force (produceBlockMatch (partAlg args) (signed args) bstrs)
       end <- getCurrentTime
       let time = BS.pack . (show :: Double -> String) . realToFrac $ diffUTCTime end start
       BS.writeFile (output args ++ "_" ++ printf "%04d" i) . BS.unlines $ bstrs' ++ ["# Time: " <> (BS.pack . show $ time)]
