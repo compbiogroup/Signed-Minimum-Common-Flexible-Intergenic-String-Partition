@@ -1,12 +1,12 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE ExplicitForAll #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE FlexibleInstances #-}
 
 -- |
 -- Module      : Genomes
@@ -72,6 +72,7 @@ import Data.Coerce (coerce)
 import Data.Hashable (Hashable)
 import Data.IntMap (IntMap)
 import Data.IntMap qualified as IntMap
+import Data.List (find)
 import Data.List qualified as List
 import Data.Maybe (fromJust)
 import Data.Set (Set)
@@ -82,7 +83,6 @@ import Data.Vector.Mutable qualified as MVec
 import LocalBase
 import System.Random (Random)
 import System.Random.Shuffle (shuffleM)
-import Data.List (find)
 
 newtype Gene = Gene Int deriving newtype (Eq, Show, Read, Hashable, Ord, Num, Bounded, Enum, Random)
 
@@ -186,8 +186,8 @@ class (Genome g) => RigidIntergenicGenome g where
   intergenicInsertion :: Idx -> g -> g -> g
   intergenicDeletion :: Idx -> Idx -> Int -> g -> g
 
-occurrence :: (Genome g) => g -> Gene -> Int
-occurrence g a = sum . fmap (\i -> if abs (getGene (Idx i) g) == a then 1 else 0) $ [1 .. size g]
+occurrence :: GeneMap [Idx] -> Gene -> Int
+occurrence geneMap a = maybe 0 length (geneMapLookup a geneMap)
 
 newtype GeneMap a = GM (IntMap a) deriving newtype (Functor, Foldable)
 
@@ -204,6 +204,7 @@ occurrenceMax :: (Genome g) => g -> Int
 occurrenceMax = maximum . fmap length . positionMap
 
 singletonOnBoth :: GeneMap [Idx] -> GeneMap [Idx] -> Gene -> Bool
+-- ^ Check if the gene is a singleton in both genomes
 singletonOnBoth posMapG posMapH gene =
   (case geneMapLookup gene posMapG of Nothing -> False; Just pos -> length pos == 1)
     && (case geneMapLookup gene posMapH of Nothing -> False; Just pos -> length pos == 1)

@@ -16,9 +16,12 @@ module Partition
     underlineGenome,
     breakpoints,
     blocks,
-    checkCommon,
+    checkCommonBal,
+    checkCommonUnbal,
     findUncommon,
-    CommonPartition (CGP),
+    costBalanced,
+    costUnbalanced,
+    CommonPartition (CGPbal,CGPunbal),
     mkCommonPartition,
     mkCommonPartition2,
     combine,
@@ -89,18 +92,37 @@ size :: Partition g -> Int
 size (GP _ _ _ n) = n
 
 data CommonPartition g1 g2 where
-  CGP :: (Genome g1, Genome g2) => Partition g1 -> Partition g2 -> CommonPartition g1 g2
+  CGPbal :: (Genome g1, Genome g2) => Partition g1 -> Partition g2 -> CommonPartition g1 g2
+  CGPunbal :: (Genome g1, Genome g2) => Partition g1 -> Partition g2 -> CommonPartition g1 g2
 
 mkCommonPartition :: (Matcher m g1 g2, Genome g1, Genome g2) => m g1 g2 -> Partition g1 -> Partition g2 -> CommonPartition g1 g2
 mkCommonPartition matcher pg ph =
-  if checkCommon matcher pg ph
-    then CGP pg ph
-    else error logicError
+  if | checkCommonBal matcher pg ph -> CGPbal pg ph
+     | checkCommonUnbal matcher pg ph -> CGPunbal pg ph
+     | otherwise -> error logicError
+
+-- | Cost of a common partittion, given by the number of breakpoints in G
+costBalanced :: CommonPartition g1 g2 -> Int
+costBalanced (CGPbal (GP _ bs _ _) _) = length bs
+costBalanced (CGPunbal _ _) = error patternError
+
+-- | Cost of a common partittion, given by the number of breakpoints in G plus the number of exclusive blocks in H
+costUnbalanced :: CommonPartition g1 g2 -> Int
+costUnbalanced (CGPbal (GP _ bs _ _) _) = length bs
+costUnbalanced (CGPunbal (GP _ bs _ _) _) = length bs + exclusive
+  where
+    exclusive = undefined
 
 -- | Verify if the elements of pg can be assign to elements of ph with a perfect
 -- match.
-checkCommon :: (Matcher m g1 g2, Genome g1) => m g1 g2 -> Partition g1 -> Partition g2 -> Bool
-checkCommon matcher pg ph = Partition.size pg == Partition.size ph && isNothing (findUncommon matcher pg ph)
+checkCommonBal :: (Matcher m g1 g2, Genome g1) => m g1 g2 -> Partition g1 -> Partition g2 -> Bool
+checkCommonBal matcher pg ph = Partition.size pg == Partition.size ph && isNothing (findUncommon matcher pg ph)
+
+-- | Verify if the elements of pg (that are not in exclusive blocks) can be assign to elements of ph
+-- (that are not in exclusive blocks) with a perfect match.
+-- TODO: Update to include exclusive blocks
+checkCommonUnbal :: (Matcher m g1 g2, Genome g1) => m g1 g2 -> Partition g1 -> Partition g2 -> Bool
+checkCommonUnbal matcher pg ph = Partition.size pg == Partition.size ph && isNothing (findUncommon matcher pg ph)
 
 -- | Find largest blocks that do not have sufficient correspondences between one partition and the other
 -- match.
@@ -152,11 +174,15 @@ instance (Show g) => Show (Partition g) where
       subs_g = map show $ blocks pg
 
 instance (Show g1, Show g2) => Show (CommonPartition g1 g2) where
-  show (CGP pg ph) = unlines [show pg, show ph]
+  show (CGPbal pg ph) = unlines [show pg, show ph]
+  show (CGPunbal pg ph) = unlines [show pg, show ph]
 
 writePartition :: CommonPartition GenesIRsR GenesIRsF -> (BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString)
-writePartition (CGP pg ph) = (genes_bs_g, irs_bs_g, genes_bs_h, irs_bs_h)
+writePartition cp = (genes_bs_g, irs_bs_g, genes_bs_h, irs_bs_h)
   where
+    (pg,ph) = case cp of
+      CGPbal pg_ ph_ -> (pg_,ph_)
+      CGPunbal pg_ ph_ -> (pg_,ph_)
     genes_bs_g = combiBS $ map fst bssg
     irs_bs_g = combiBS $ interleavelists (map snd bssg) ir_breaks_g
     genes_bs_h = combiBS $ map fst bssh
@@ -169,7 +195,8 @@ writePartition (CGP pg ph) = (genes_bs_g, irs_bs_g, genes_bs_h, irs_bs_h)
 
 -- | For each block in S, the correspondent positions of blocks in P, indices starting in 0
 getBlocksCorrespondence :: (Matcher m g1 g2) => m g1 g2 -> CommonPartition g1 g2 -> [[Int]]
-getBlocksCorrespondence matcher (CGP pg ph) = getBlocksCorrespondence_ matcher pg ph
+getBlocksCorrespondence matcher (CGPbal pg ph) = getBlocksCorrespondence_ matcher pg ph
+getBlocksCorrespondence matcher (CGPunbal pg ph) = getBlocksCorrespondence_ matcher pg ph
 
 getBlocksCorrespondence_ :: (Matcher m g1 g2) => m g1 g2 -> Partition g1 -> Partition g2 -> [[Int]]
 getBlocksCorrespondence_ matcher pg ph =
@@ -205,9 +232,12 @@ blockDelsToBps seq_bs = EnumSet.fromList . init $ map (\(BlockDel _ b _) -> b) b
   where
     bs = toList seq_bs
 
-combine :: (Matcher m g1 g2) => m g1 g2 -> CommonPartition g1 g2 -> CommonPartition g1 g2
-combine matcher (CGP pg ph) = mkCommonPartition2 matcher g bg' h bh'
+combine :: (Matcher m g1 g2, Genome g1, Genome g2) => m g1 g2 -> CommonPartition g1 g2 -> CommonPartition g1 g2
+combine matcher cp = mkCommonPartition2 matcher g bg' h bh'
   where
+    (pg,ph) = case cp of
+      CGPbal pg_ ph_ -> (pg_,ph_)
+      CGPunbal pg_ ph_ -> (pg_,ph_)
     g = underlineGenome pg
     h = underlineGenome ph
     bg = breakpoints pg

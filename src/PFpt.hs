@@ -26,15 +26,16 @@ import Control.Exception (assert)
 import Control.Monad (void)
 import Data.Either (isRight)
 import Data.EnumSet qualified as EnumSet
+import Data.Foldable (toList)
 import Data.Map qualified as Map
 import Data.Maybe (isNothing, listToMaybe)
 import Data.MultiMap (MultiMap)
 import Data.MultiMap qualified as MMap
 import Data.Set qualified as Set
 import GHC.Conc (threadDelay)
-import Genomes (Genome (getGene, size, subGenome), Idx, Matcher (isDirectMatch, isReverseMatch), decIdx, incIdx, mkIdx)
+import Genomes (GeneMap, Genome (alphabet, getGene, size, subGenome), Idx, Matcher (isDirectMatch, isReverseMatch), decIdx, geneMapLookup, incIdx, mkIdx, occurrence, positionMap, singletonOnBoth)
 import LocalBase
-import Partition (CommonPartition, mkCommonPartition2)
+import Partition (CommonPartition, mkCommonPartition2, costUnbalanced)
 
 data Vertex = Vtx
   { vInG :: Bool,
@@ -66,6 +67,8 @@ data SampleGraph m g1 g2 = SG
   { sg_matcher :: m g1 g2,
     sg_g :: g1,
     sg_h :: g2,
+    sg_posG :: GeneMap [Idx],
+    sg_posH :: GeneMap [Idx],
     sample :: Sample,
     edges :: MultiMap Vertex Edge
   }
@@ -75,10 +78,7 @@ instance (Show g1, Show g2) => Show (SampleGraph m g1 g2) where
     where
       edges_str = unlines . map show . MMap.toList $ edges
 
--- TODO: To deal with unbalance strings the branching rule 2 still have to be
--- implemented and a text must be include on the rare odd path to ensure that they
--- are rare
-fptPartition :: (Genome g1, Genome g2, Matcher m g1 g2) => Int -> m g1 g2 -> g1 -> g2 -> IO (Maybe (CommonPartition g1 g2), Bool)
+fptPartition :: (Show g1, Show g2, Genome g1, Genome g2, Matcher m g1 g2) => Int -> m g1 g2 -> g1 -> g2 -> IO (Maybe (CommonPartition g1 g2), Bool)
 fptPartition time_limit matcher g h = do
   best_sg <- newMVar Nothing
   full_comp <- isRight <$> race (threadDelay time_limit) (runFpt best_sg sg0)
@@ -93,30 +93,64 @@ fptPartition time_limit matcher g h = do
       )
     $ maybe_sg
   where
-    sg0 = (\sg -> assert (checkDegrees 0 2 sg) sg) $ createSampleGraph matcher g h sample0
-    sample0 = [] -- TODO: add an initial sample with the singletons of both strings
+    !sg0 = (\sg -> assert (checkDegrees 0 2 sg) sg) $ createSampleGraph matcher g h sample0
+    sample0 = map getBlockWitnessIdxs . filter (singletonOnBoth posMapG posMapH) . toList $ alphabet g
 
-runFpt :: (Genome g1, Genome g2, Matcher m g1 g2) => MVar (Maybe (SampleGraph m g1 g2)) -> SampleGraph m g1 g2 -> IO ()
-runFpt best_sg = go
+    getBlockWitnessIdxs gene =
+      case (geneMapLookup gene posMapG, geneMapLookup gene posMapH) of
+        (Just [posG], Just [posH]) -> (posG, posH)
+        _ -> error patternError
+    posMapG = sg_posG sg0
+    posMapH = sg_posH sg0
+
+-- TODO: Find first solution without branch 2
+runFpt :: (Show g1, Show g2, Genome g1, Genome g2, Matcher m g1 g2) => MVar (Maybe (SampleGraph m g1 g2)) -> SampleGraph m g1 g2 -> IO ()
+runFpt best_sg = branch1
   where
-    go !sg = do
-      test <- toBig sg
+    -- Branching Rule 1: If the sample graph sg contains a connected component which is a rare odd path
+    -- (u_1, v_1, ... ,v_{l−1}, u_l), then do the following for each vertex u_i, 1 <= i <= l: for each
+    -- vertex v such that it has the same label as u_i, it is not in a match of the sample, and it is
+    -- from a different string than u_i, branch into the case to add (u_i, v) to the sample, if (u_i, v)
+    -- is not parallel to any match of the sample.
+    branch1 !sg = do
+      test <- toBig (traceValue sg)
       if
           | test -> return ()
-          | isNothing maybe_oddPath -> selectSG sg
+          | isNothing maybe_oddPath -> selectSG sg -- branch2 sg <<-- TODO: add branch2
           | null branch_edges -> return ()
           | otherwise ->
               mapM_
                 ( \edge ->
                     let sg' = addBlackEdge edge sg
-                     in assert (checkDegrees 0 2 sg') $ go sg'
+                     in assert (checkDegrees 0 2 sg') $ branch1 sg'
                 )
                 branch_edges
       where
         branch_edges = maybe [] (edgesFromRareOddPath sg) maybe_oddPath
         maybe_oddPath = getRareOddPath sg
 
+    -- Branching Rule 2: If the partial sample graph sg contains a connected component which is an abundant
+    -- odd path (u_1, v_1, ... ,v_{l−1}, u_l), then do the following: for each vertex u_i, 1 <= i <= l:
+    -- branch into a new partial sample graph without u_i and without edges that are no longer valid.
+    branch2 !sg = do
+      test <- toBig sg
+      if
+          | test -> return ()
+          | isNothing maybe_oddPath -> selectSG sg
+          | null branch_vertices -> return ()
+          | otherwise ->
+              mapM_
+                ( \vtx ->
+                    let sg' = removeVertex vtx sg
+                     in assert (checkDegrees 0 2 sg') $ branch2 sg'
+                )
+                branch_vertices
+      where
+        branch_vertices = maybe [] evens maybe_oddPath
+        maybe_oddPath = getAbundantOddPath sg
+
     toBig sg = do
+      -- TODO: Update this function to deal with unbalance strings
       maybe_best_sg <- readMVar best_sg
       case maybe_best_sg of
         Nothing -> return False
@@ -127,8 +161,13 @@ runFpt best_sg = go
         Nothing ->
           void (swapMVar best_sg (Just sg))
         Just best_sg' -> do
-          _ <- swapMVar best_sg (if length (sample sg) < length (sample best_sg') then Just sg else Just best_sg')
+          _ <- swapMVar best_sg (if cost sg < cost best_sg' then Just sg else Just best_sg')
           return ()
+
+-- TODO: Change the implementation so that the partition do not need to be fully calculated
+-- The cost of the partition correspondent to the sample graph
+cost :: (Matcher m g1 g2, Genome g1, Genome g2) => SampleGraph m g1 g2 -> Int
+cost = costUnbalanced . sampleGraphToPartition . finalizeCorrespondence
 
 sampleGraphToPartition :: (Matcher m g1 g2, Genome g1, Genome g2) => SampleGraph m g1 g2 -> CommonPartition g1 g2
 sampleGraphToPartition (SG {..}) = mkCommonPartition2 sg_matcher sg_g bg sg_h bh
@@ -140,20 +179,32 @@ sampleGraphToPartition (SG {..}) = mkCommonPartition2 sg_matcher sg_g bg sg_h bh
         then EnumSet.insert (idx - 1) breaks
         else breaks
       where
-        e1 = head . (\l -> if null l then undefined else l) $ edges MMap.! Vtx inG (idx - 1)
-        e2 = head . (\l -> if null l then undefined else l) $ edges MMap.! Vtx inG idx
+        e1 = head . (\l -> if null l then error patternError else l) $ edges MMap.! Vtx inG (idx - 1)
+        e2 = head . (\l -> if null l then error patternError else l) $ edges MMap.! Vtx inG idx
 
 -- return vertices from a rare odd path if such path exists
-getRareOddPath :: (Genome g1) => SampleGraph m g1 g2 -> Maybe [Vertex]
+getRareOddPath :: (Genome g1, Genome g2) => SampleGraph m g1 g2 -> Maybe [Vertex]
 getRareOddPath = listToMaybe . getRareOddPaths
 
+-- return vertices from a abundant odd path if such path exists
+getAbundantOddPath :: (Genome g1, Genome g2) => SampleGraph m g1 g2 -> Maybe [Vertex]
+getAbundantOddPath = listToMaybe . getAbundantOddPaths
+
 -- return vertices from each rare odd path
-getRareOddPaths :: (Genome g1) => SampleGraph m g1 g2 -> [[Vertex]]
-getRareOddPaths (SG {..}) = result_list
+getRareOddPaths :: (Genome g1, Genome g2) => SampleGraph m g1 g2 -> [[Vertex]]
+getRareOddPaths = getOddPaths True True
+
+-- return vertices from each abundant odd path
+getAbundantOddPaths :: (Genome g1, Genome g2) => SampleGraph m g1 g2 -> [[Vertex]]
+getAbundantOddPaths sg = getOddPaths False True sg ++ getOddPaths False False sg
+
+getOddPaths :: (Genome g1, Genome g2) => Bool -> Bool -> SampleGraph m g1 g2 -> [[Vertex]]
+getOddPaths takeRare initalVtxInG sg@(SG {..}) = result_list
   where
+    initialVertices = filter ((if takeRare then id else not) . isRare sg) . map (Vtx initalVtxInG) $ [1 .. mkIdx (size sg_g)]
     result_list =
       snd $
-        foldr (getOddPathWithVertex . Vtx True) (Set.empty, []) [1 .. mkIdx (size sg_g)]
+        foldr getOddPathWithVertex (Set.empty, []) initialVertices
     getOddPathWithVertex v (seen, vs) =
       if
           | v `Set.member` seen -> (seen, vs)
@@ -186,6 +237,17 @@ getRareOddPaths (SG {..}) = result_list
           _ -> error patternError
       where
         aux_seen' = Set.insert v aux_seen
+
+-- check if element is rare
+isRare :: (Genome g1, Genome g2) => SampleGraph m g1 g2 -> Vertex -> Bool
+isRare SG {..} v = if vInG v then occG <= occH else occH <= occG
+  where
+    occG = occurrence sg_posG gene
+    occH = occurrence sg_posH gene
+    gene =
+      if vInG v
+        then getGene (vIdx v) sg_g
+        else getGene (vIdx v) sg_h
 
 -- return true if the black edges from the witnesses share and edge
 checkConflict :: BlockWitness -> BlockWitness -> Bool
@@ -229,6 +291,7 @@ checkDegrees low up SG {..} =
             && length l <= up'
             && not (any ((vInG v ==) . vInG . eOther) l)
 
+-- Get from an rare odd path the edges that can be include as a block witness
 edgesFromRareOddPath :: (Matcher m g1 g2, Genome g1, Genome g2) => SampleGraph m g1 g2 -> [Vertex] -> [BlockWitness]
 edgesFromRareOddPath sg@(SG {..}) vertices = do
   v <- if length verticesG > length verticesH then verticesG else verticesH
@@ -253,10 +316,12 @@ edgesFromRareOddPath sg@(SG {..}) vertices = do
 -- let vsH = map (vIdx . eOther) $ edges MMap.! Vtx True idxG
 --  in (idxH `elem` vsH)
 
-createSampleGraph :: (Genome g1, Genome g2) => m g1 g2 -> g1 -> g2 -> Sample -> SampleGraph m g1 g2
-createSampleGraph matcher g h = foldr addBlackEdge sg0
+createSampleGraph :: (Genome g1, Genome g2, Matcher m g1 g2) => m g1 g2 -> g1 -> g2 -> [(Idx, Idx)] -> SampleGraph m g1 g2
+createSampleGraph matcher g h = foldr (\idxs sg -> addBlackEdge (findLimits sg idxs) sg) sg0
   where
-    sg0 = SG matcher g h [] MMap.empty
+    sg0 = SG matcher g h posMapG posMapH [] MMap.empty
+    posMapG = positionMap g
+    posMapH = positionMap h
 
 -- Convert pair of indices into a block witness by finding the limits of
 -- pairs parallel to it.
@@ -302,46 +367,18 @@ findLimits SG {..} (idxG0, idxH0) =
 -- the correspondent black edge and the edges parallel to that correspondence.
 -- Also remove any edge that is no longer valid.
 addBlackEdge :: (Genome g1, Genome g2) => BlockWitness -> SampleGraph m g1 g2 -> SampleGraph m g1 g2
-addBlackEdge bw sg@(SG {..}) = sg {sample = sample', edges = edges'''}
+addBlackEdge bw sg = sg {sample = sample', edges = edges'''}
   where
     (idxG0, idxH0) = w_black_pair bw
-    sample' = bw : sample
+    sample' = bw : sample sg
     vG0 = Vtx True idxG0
     vH0 = Vtx False idxH0
-    edges_clean = cleanEdges vH0 . cleanEdges vG0 $ edges
+    edges_clean = edges (cleanEdges vH0 . cleanEdges vG0 $ sg)
     edges' =
       MMap.insert vH0 (Edge vG0 (idxG0, idxH0) bw True) $
         MMap.insert vG0 (Edge vH0 (idxG0, idxH0) bw True) edges_clean
     edges'' = addEdges True (not (w_inverted bw)) (idxG0, idxH0) edges'
     edges''' = addEdges False (w_inverted bw) (idxG0, idxH0) edges''
-
-    -- Remove any green edge that is no longer valid after the inclusion of a new black
-    -- edge incident on v.
-    cleanEdges v aux_edges = aux_edges'
-      where
-        aux_edges' = foldr (delGreens v) aux_edges (aux_edges MMap.! v)
-    delGreens v edge = delFromVertex (eOther edge) . delFromVertex v
-      where
-        bw' = eParent edge
-        (idxG, idxH) = w_black_pair bw'
-        delFromVertex u_aux = go u_aux
-          where
-            move =
-              -- how to move to the next vertex
-              if vInG u_aux && vIdx u_aux < idxG || not (vInG u_aux) && vIdx u_aux < idxH
-                then \u -> Vtx (vInG u) (decIdx . vIdx $ u)
-                else \u -> Vtx (vInG u) (incIdx . vIdx $ u)
-            go u aux_edges =
-              if vIdx u <= 0
-                || (vInG u && vIdx u > mkIdx (size sg_g))
-                || (vInG u && vIdx u > mkIdx (size sg_h))
-                || length e_list == length e_list'
-                then aux_edges
-                else go (move u) aux_edges'
-              where
-                e_list = aux_edges MMap.! u
-                e_list' = filter (\e -> eParent e /= bw') e_list
-                aux_edges' = MMap.fromMap . Map.insert u e_list' . MMap.toMap $ aux_edges
 
     -- The directions (dir) indicate what is the next gene to look at.
     -- If dir is False we are going from right to left if it is True we are going from
@@ -359,6 +396,38 @@ addBlackEdge bw sg@(SG {..}) = sg {sample = sample', edges = edges'''}
         aux_edges' =
           MMap.insert vH (Edge vG (idxG', idxH') bw False) $
             MMap.insert vG (Edge vH (idxG', idxH') bw False) aux_edges
+
+removeVertex :: (Genome g1, Genome g2) => Vertex -> SampleGraph m g1 g2 -> SampleGraph m g1 g2
+removeVertex = cleanEdges
+
+-- Remove any green edge that is no longer valid after the inclusion of a new black
+-- edge incident on v or after the deletion of v.
+cleanEdges :: (Genome g1, Genome g2) => Vertex -> SampleGraph m g1 g2 -> SampleGraph m g1 g2
+cleanEdges v sg@(SG{..}) = sg {edges = edges'}
+  where
+    edges' = foldr delGreens edges (edges MMap.! v)
+    delGreens edge = delFromVertex (eOther edge) . delFromVertex v
+      where
+        bw' = eParent edge
+        (idxG, idxH) = w_black_pair bw'
+        delFromVertex u_aux = go u_aux
+          where
+            move =
+              -- how to move to the next vertex
+              if vInG u_aux && vIdx u_aux < idxG || not (vInG u_aux) && vIdx u_aux < idxH
+                then \u -> Vtx (vInG u) (decIdx . vIdx $ u)
+                else \u -> Vtx (vInG u) (incIdx . vIdx $ u)
+            go u aux_edges =
+              if vIdx u <= 0
+                || (vInG u && vIdx u > mkIdx (size sg_g))
+                || (not (vInG u) && vIdx u > mkIdx (size sg_h))
+                || length e_list == length e_list'
+                then aux_edges
+                else go (move u) aux_edges'
+              where
+                e_list = aux_edges MMap.! u
+                e_list' = filter (\e -> eParent e /= bw') e_list
+                aux_edges' = MMap.fromMap . Map.insert u e_list' . MMap.toMap $ aux_edges
 
 -- Make sure that there is at most one edge incident in each pair of vertices
 -- so that we have a correspondence between the rare genes of G and H.
@@ -420,4 +489,4 @@ finalizeCorrespondence sg = sg2
           MMap.fromMap . Map.insert u1 (delEdge [] (m MMap.! u1)) . MMap.toMap $ m
           where
             delEdge _ [] = error patternError
-            delEdge acc (e : es) = if eOther e == u2 then reverse acc ++ es else delEdge (e:acc) es
+            delEdge acc (e : es) = if eOther e == u2 then reverse acc ++ es else delEdge (e : acc) es

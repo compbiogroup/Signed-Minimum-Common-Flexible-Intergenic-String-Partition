@@ -164,5 +164,12 @@ prop_reversalsKeepBalanced = property $ do
   h <- forAll $ applyReversals k g
   assert $ areBalanced RRRM g h
 
+prop_occurrenceWithGeneMapImplementationWorks :: Property
+prop_occurrenceWithGeneMapImplementationWorks = property $ do
+  g <- forAll (genRGenome 100)
+  i <- forAll (Gen.int (Range.linear 1 (size g)))
+  let a = canonicOri (getGene (mkIdx i) g)
+  occurrence (positionMap g) a === (sum . fmap (\i' -> if abs (getGene (mkIdx i') g) == a then 1 else 0) $ [1 .. size g])
+
 tests :: IO Bool
 tests = checkSequential $$(discover)

@@ -5,6 +5,6 @@ pkgs.mkShell {
   name = "haskell stack shell";
   buildInputs = with pkgs; [
     stack
-    haskell-language-server
+    haskell.packages.ghc928.haskell-language-server
   ];
 }
