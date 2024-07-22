@@ -21,12 +21,14 @@ newtype Dist = Dist Int deriving newtype (Eq, Show, Read)
 data Ori = LR | RL deriving (Eq, Show)
 
 class Orientable o where
-  -- ^ Get orientation
-
+  -- Get orientation
   getOri :: o -> Ori
-  -- ^ Invert orientation
 
+  -- Invert orientation
   invOri :: o -> o
+
+  -- Check if there is two orientations
+  hasOri :: o -> Bool
 
 canonicOri :: (Orientable o) => o -> o
 -- ^ Transform a Orientable to canonical orientation (LR)
@@ -47,6 +49,10 @@ interleavelists l1 l2 = concat . List.transpose $ [l1, l2]
 patternError :: String
 -- ^ ERROR message to impossible pattern.
 patternError = "ERROR: Pattern shouldn't be possible."
+
+indexError :: String
+-- ^ ERROR message for index out of bounds.
+indexError = "ERROR: Index out of bounds."
 
 inputError :: String
 -- ^ ERROR message to incorrect input.
@@ -73,6 +79,17 @@ odds :: [a] -> [a]
 -- ^ take odd positions elements of a list (index start in 0)
 odds (_ : xs) = evens xs
 odds _ = []
+
+replace :: Int -> (a -> a) -> [a] -> [a]
+-- ^ replace element in a list. If you are using this function a lot, maybe you should use a different data structure.
+replace i f xs =
+  case splitAt i xs of
+    (_, []) -> error indexError
+    (before, e : after) -> before ++ [f e] ++ after
+
+rotateL :: Int -> [a] -> [a]
+-- ^ rotate the given number of positions to the left
+rotateL = drop <> take
 
 minWith :: (Foldable t, Ord b) => (a -> b) -> t a -> Maybe a
 -- calculate minimum converting values with function

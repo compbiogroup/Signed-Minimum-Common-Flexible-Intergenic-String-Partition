@@ -129,7 +129,7 @@ partitionProduceValidCorrespondence partAlg size_lim =
     k <- forAll $ Gen.int (Range.linear 0 (size g))
     h <- forAll $ rearrangeAndFlexibilizeGenome k g
     part <- forAll . return $ partAlg RFRM g h
-    (CGPbal pg ph) <- forAll . return $ combine RFRM part
+    (CGPbal pg ph) <- forAll . return $ Partition.combine RFRM part
     assert $ checkCommonBal RFRM pg ph
 
 prop_fptPartitionProduceValidCorrespondence :: Property
@@ -139,7 +139,7 @@ prop_fptPartitionProduceValidCorrespondence =
     k <- forAll $ Gen.int (Range.linear 0 (size g))
     h <- forAll $ rearrangeAndFlexibilizeGenome k g
     (part,_) <- fmap (first fromJust) . evalIO $ fptPartition 100000000 RFRM g h
-    (CGPunbal pg ph) <- forAll . return $ combine RFRM part
+    (CGPunbal pg ph) <- forAll . return $ Partition.combine RFRM part
     assert $ checkCommonUnbal RFRM pg ph
 
 tests :: IO Bool

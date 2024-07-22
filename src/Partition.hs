@@ -46,7 +46,7 @@ import Data.Maybe (isNothing)
 import Data.Sequence (Seq (Empty, (:<|), (:|>)), (><))
 import Data.Sequence qualified as Seq
 import Data.Set qualified as Set
-import Genomes (GenesIRsF, GenesIRsR, Genome (..), IR, Idx, IntergenicGenome (..), Matcher (..), geneMapLookup, incIdx, mkIdx, positionMap, writeFGenome, writeIR, writeRGenome)
+import Genomes (GenesIRsF, GenesIRsR, Genome (..), IR, Idx, IntergenicChromosome (..), Matcher (..), geneMapLookup, incIdx, mkIdx, positionMap, writeFGenome, writeIR, writeRGenome)
 import LocalBase
 
 type Breakpoints = EnumSet Idx
@@ -82,7 +82,7 @@ breakpoints (GP _ _ bps _) = bps
 breakpointsIdx :: Partition g -> [Idx]
 breakpointsIdx (GP _ _ bps _) = EnumSet.toAscList bps
 
-breakpointsIR :: (IntergenicGenome g) => Partition g -> [IR]
+breakpointsIR :: (IntergenicChromosome g) => Partition g -> [IR]
 breakpointsIR gp@(GP g _ _ _) = map (`getIR` g) (breakpointsIdx gp)
 
 blocks :: Partition g -> [g]

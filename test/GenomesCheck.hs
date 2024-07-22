@@ -11,6 +11,8 @@ import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import LocalBase
 
+-- TODO: test cut and join
+
 genGene :: Gen Int
 genGene = Gen.int (Range.linear 1 100)
 
@@ -49,7 +51,7 @@ genRGenomeWithSign sign size_lim = do
       )
       <$> Gen.list (Range.singleton $ n - 2) genGene
   irs <- Gen.list (Range.singleton $ n - 1) genIR
-  return $ mkRGenome True sign genes irs
+  return $ mkRGenome Linear True sign genes irs
   where
     swaps b v = if b then v else -v
 
@@ -67,11 +69,11 @@ genFGenomeWithSign sign size_lim = do
   porc <- Gen.list (Range.singleton $ n - 1) $ Gen.int (Range.linear 1 50)
   let irs_high = zipWith (\ir p -> ir + p * ir `div` 100) irs_low porc
   let irs = zip irs_low irs_high
-  return $ mkFGenome True sign genes irs
+  return $ mkFGenome Linear True sign genes irs
   where
     swaps b v = if b then v else -v
 
-rearrangeGenome :: (RigidIntergenicGenome g) => Int -> g -> Gen g
+rearrangeGenome :: (RigidIntergenicChromosome g) => Int -> g -> Gen g
 rearrangeGenome = applyReversals
 
 rearrangeAndFlexibilizeGenome :: Int -> GenesIRsR -> Gen GenesIRsF
@@ -80,7 +82,7 @@ rearrangeAndFlexibilizeGenome k g = do
   f <- Gen.int (Range.linear 0 100)
   return (flexibilize f g')
 
-applyReversals :: (RigidIntergenicGenome g) => Int -> g -> Gen g
+applyReversals :: (RigidIntergenicChromosome g) => Int -> g -> Gen g
 applyReversals k g =
   if size g <= 4
     then return g

@@ -3,6 +3,7 @@
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeFamilies #-}
 
 -- |
 -- Module      : DB
@@ -14,7 +15,7 @@
 module DB where
 
 import Control.Monad (replicateM, zipWithM_)
-import Control.Monad.Random (Rand, StdGen, evalRandIO, getRandomR, getRandoms)
+import Control.Monad.Random (Rand, StdGen, evalRandIO, getRandom, getRandomR, getRandoms, uniform)
 import Data.ByteString (ByteString)
 import Data.ByteString.Char8 qualified as BS
 import Data.List (transpose, unfoldr)
@@ -51,6 +52,7 @@ data Args = Args
     db_porc :: Int,
     db_sign :: Sign,
     db_indel :: Int,
+    db_mult_chrom :: Bool,
     db_zeros :: Bool,
     db_output :: String
   }
@@ -180,6 +182,11 @@ argParser =
           <> help "How much indels to apply (D deletions follow by D insertions)."
       )
     <*> switch
+      ( long "mult_chrom"
+          <> short 'c'
+          <> help "Whether to produce multiple chromosomes after operations. In that case all operations will be DCJs."
+      )
+    <*> switch
       ( long "zeros"
           <> short 'z'
           <> help "Whether to produce intergenic regions with zeros."
@@ -194,7 +201,7 @@ argParser =
 main :: IO ()
 main = do
   args <- execParser opts
-  let (flex_levels, names) = case (db_flexLevel args) of
+  let (flex_levels, names) = case db_flexLevel args of
         Rigid -> ([Rigid], [db_output args])
         Flex l h ->
           if l == h
@@ -211,26 +218,33 @@ genPair Args {..} flex_levels = do
   g <- case db_par of
     (DB1 (RepDB rl rh d)) -> randomGenomeWithReplicas db_zeros db_size d rl rh db_sign
     (DB2 (RandDB lim)) -> randomGenome db_zeros db_size lim db_sign
+  let g_mc = toMC g
   h <-
-    applyIndels
-      =<< if db_nop == -1
-        then shuffleGenome g
-        else applyOperations g
-  return $ genBS g h
+    if db_mult_chrom && db_nop /= 0
+      then applyDCJs g_mc db_nop
+      else
+        toMC
+          <$> ( applyIndels
+                  =<< if db_nop == -1
+                    then shuffleGenome g
+                    else applyOperations g
+              )
+  return $ genBS g_mc h
   where
-    genBS g h =
+    toMC g' = mkMCRGenome [getGene 1 g', getGene (mkIdx (size g')) g'] [g']
+    genBS g_mc h =
       map
         ( \f ->
             let (s2, i2) =
                   ( case f of
-                      Rigid -> writeRGenome True h
-                      Flex l _ -> writeFGenome True (flexibilize l h)
+                      Rigid -> writeMultiC (writeRGenome True) h
+                      Flex l _ -> writeMultiC (writeFGenome True) (flexibilizeMC l h)
                   )
              in (s1, i1, s2, i2)
         )
         flex_levels
       where
-        (s1, i1) = writeRGenome True g
+        (s1, i1) = writeMultiC (writeRGenome True) g_mc
 
     r_r = (db_nop * db_porc) `div` 100
     r_t = db_nop - r_r
@@ -250,15 +264,32 @@ genPair Args {..} flex_levels = do
       i <- getRandomR (1 :: Idx, mkIdx $ size g - 1)
       ir1 <- if db_zeros then return 0 else getRandomR (0, 100)
       ir2 <- if db_zeros then return 0 else getRandomR (max 0 (irToInt (getIR i g) - ir1), 100)
-      return $ intergenicInsertion i (mkRGenome False db_sign [next] [ir1, ir2]) g
+      return $ intergenicInsertion i (mkRGenome Linear False db_sign [next] [ir1, ir2]) g
 
-    applyOperations :: (RigidIntergenicGenome g, IntergenicGenome g) => g -> Rand StdGen g
+    applyOperations :: (RigidIntergenicChromosome g) => g -> Rand StdGen g
     applyOperations g = do
       coins <- getRandoms
       let ops = unfoldr operations_for_one (r_t, r_r, coins)
       foldr (=<<) (return g) ops
 
-    operations_for_one :: (RigidIntergenicGenome g, IntergenicGenome g) => (Int, Int, [Bool]) -> Maybe (g -> Rand StdGen g, (Int, Int, [Bool]))
+    applyDCJs :: MultiGIs GenesIRsR -> Int -> Rand StdGen (MultiGIs GenesIRsR)
+    applyDCJs g 0 = return g
+    applyDCJs g nop = do
+      let crhs_idxs = filter (\idx -> let chr = getChromosome idx g in size chr > 1 || isCircular chr && size chr > 0) [1..mkIdx (numChromosomes g)]
+      chri_ <- uniform crhs_idxs
+      chrj_ <- uniform . filter (\idx -> let chr = getChromosome idx g in idx /= chri_ || size chr > 2 || size chr == 2 && isCircular chr) $ crhs_idxs
+      let chri = min chri_ chrj_
+          chrj = max chri_ chrj_
+          chr_i = getChromosome chri g
+          chr_j = getChromosome chrj g
+      i <- getRandomR (1, mkIdx $ size chr_i - (if isCircular chr_i then 0 else 1) - (if chri == chrj then 1 else 0))
+      j <- getRandomR (if chri == chrj then i+1 else 1, mkIdx $ size chr_j - (if isCircular chr_j then 0 else 1))
+      x <- getRandomR (0, irToInt $ getIR i chr_i)
+      y <- getRandomR (0, irToInt $ getIR j chr_j)
+      connectAC <- getRandom
+      applyDCJs (intergenicDCJ (chri, i) (chrj, j) connectAC x y g) (nop - 1)
+
+    operations_for_one :: (RigidIntergenicChromosome g) => (Int, Int, [Bool]) -> Maybe (g -> Rand StdGen g, (Int, Int, [Bool]))
     operations_for_one (_, _, []) = Nothing
     operations_for_one (r_t', r_r', coin : coins)
       | r_t' == 0 && r_r' == 0 = Nothing

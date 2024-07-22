@@ -17,7 +17,7 @@ import Data.ByteString.Builder (intDec, toLazyByteString)
 import Data.ByteString.Char8 qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Time (diffUTCTime, getCurrentTime)
-import Genomes (GenesIRsF, GenesIRsR, RigidFlexibleReverseMatcher (..), Sign (..), readFGenome, readRGenome)
+import Genomes (GenesIRsF, GenesIRsR, RigidFlexibleReverseMatcher (..), ChromType(Linear), Sign (..), readFGenome, readRGenome)
 import LocalBase
 import Options.Applicative
 import PApprox (approxPartition, approxLowerBound)
@@ -115,8 +115,8 @@ produceBlockMatch alg sign (s1, i1, s2, i2) =
               bc = writeBlocksCorrespondence $ getBlocksCorrespondence RFRM part
            in return [s1', i1', s2', i2', bc, if fullComp then "# Exact solution" else "# Partial solution"]
   where
-    g = readRGenome True sign s1 i1
-    h = readFGenome True sign s2 i2
+    g = readRGenome Linear True sign s1 i1
+    h = readFGenome Linear True sign s2 i2
 
 writeBlocksCorrespondence :: [[Int]] -> BS.ByteString
 writeBlocksCorrespondence = BS.unwords . (\l -> interleavelists l (replicate (length l - 1) "|")) . map (BS.unwords . map (LBS.toStrict . toLazyByteString . intDec))
