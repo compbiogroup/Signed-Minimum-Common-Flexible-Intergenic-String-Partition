@@ -167,7 +167,7 @@ runFpt best_sg = branch1
 -- TODO: Change the implementation so that the partition do not need to be fully calculated
 -- The cost of the partition correspondent to the sample graph
 cost :: (Matcher m g1 g2, Genome g1, Genome g2) => SampleGraph m g1 g2 -> Int
-cost = costUnbalanced . sampleGraphToPartition . finalizeCorrespondence
+cost sg = costUnbalanced (sg_matcher sg) . sampleGraphToPartition . finalizeCorrespondence $ sg
 
 sampleGraphToPartition :: (Matcher m g1 g2, Genome g1, Genome g2) => SampleGraph m g1 g2 -> CommonPartition g1 g2
 sampleGraphToPartition (SG {..}) = mkCommonPartition2 sg_matcher sg_g bg sg_h bh

@@ -48,15 +48,17 @@ module Genomes
     MultiGIs,
     GenesIRsR,
     GenesIRsF,
-    mkMCRGenome,
+    toMC,
     mkRGenome,
     mkFGenome,
     mkRGenome0,
     mkFGenome0,
     writeIR,
     readRGenome,
+    readMCRGenome,
     writeRGenome,
     readFGenome,
+    readMCFGenome,
     writeFGenome,
     writeMultiC,
     flexibilize,
@@ -140,7 +142,6 @@ instance Show IR where
 instance Orientable Gene where
   getOri a = if a >= 0 then LR else RL
   invOri a = -a
-  hasOri _ = True
 
 data Sign = Signed | Unsigned deriving (Eq, Show, Enum)
 
@@ -215,6 +216,9 @@ class Genome g where
   -- Also ensures that they are singletons in g2.
   -- Requires 1 < i < size g, for each index i.
   makeSingletons :: (Genome g2) => g2 -> [Idx] -> g -> (g, [Gene])
+
+  -- Check if gene orientation is being included as signs
+  hasSigns :: g -> Bool
 
 class (Genome g) => Chromosome g where
   isLinear :: g -> Bool
@@ -320,6 +324,8 @@ instance Genome GenesIRs where
       new_h = getNewGene h
       new_genes = take (length idxs) [max new_g new_h ..]
 
+  hasSigns (GenesIRs _ sign _ _ _) = sign == Signed
+
 instance Chromosome GenesIRs where
   -- turn into a circular chromosome. The first and last genes (caps) are deleted and the first
   -- and last IRs are combined.
@@ -355,9 +361,9 @@ instance Genome c => Genome (MultiGIs c) where
          in if idx <= mkIdx s then getGene idx g else findGene (idx - mkIdx s) gs
       findGene _ [] = error indexError
   invGene g = invGene (head . chromosomes $ g)
-  setGenes idxs genes mc = foldl setGene mc (zip idxs genes)
+  setGenes idxs genes mc = foldr setGene mc (zip idxs genes)
     where
-      setGene genome (i, gene) = MultiGIs (caps mc) . findChrom [] i . chromosomes $ genome
+      setGene (i, gene) = MultiGIs (caps mc) . findChrom [] i . chromosomes
         where
           findChrom gs_old idx (g : gs) =
             let s = size g
@@ -381,55 +387,76 @@ instance Genome c => Genome (MultiGIs c) where
       new_g = getNewGene g
       new_h = getNewGene h
       new_genes = take (length idxs) [max new_g new_h ..]
+  hasSigns = any hasSigns . chromosomes
 
 instance IntergenicChromosome GenesIRs where
   getIR idx (GenesIRs _ _ _ irs _) = irs Vec.! (idxToInt idx - 1)
-  intergenicFullReversal (GenesIRs Linear sign vs vi new) = GenesIRs Linear sign vs' vi' new
+  intergenicFullReversal (GenesIRs chtype sign vs vi new) = GenesIRs chtype sign vs' vi' new
     where
       vs' = case sign of { Unsigned -> id; Signed -> fmap negate } $ Vec.reverse vs
       vi' = Vec.reverse vi
-  intergenicFullReversal (GenesIRs Circular sign vs vi new) = GenesIRs Circular sign vs' vi new
-    where
-      vs' = case sign of { Unsigned -> id; Signed -> fmap negate } $ vs
 
 instance Orientable GenesIRs where
-  getOri g@(GenesIRs _ _ genes irs _) = if (genes, irs) <= (genes', irs') then LR else RL
+  getOri g_@(GenesIRs Circular _ genes irs _) = if (genes, irs) <= (genes', irs') then LR else RL
+    where
+      (GenesIRs _ _ genes' irs' _) = invOri g
+      g = canonicPosition g_
+  getOri g@(GenesIRs Linear _ genes irs _) = if (genes, irs) <= (genes', irs') then LR else RL
     where
       (GenesIRs _ _ genes' irs' _) = invOri g
   invOri = intergenicFullReversal
-  hasOri (GenesIRs _ sign _ _ _) = sign == Signed
+
+-- Rotate GenesIRs such that after this rotation any equal pair of circular chromosomes will be on the same position
+canonicPosition :: GenesIRs -> GenesIRs
+canonicPosition g@(GenesIRs Linear _ _ _ _) = g
+canonicPosition (GenesIRs Circular sign genes irs new) = GenesIRs Linear sign genes' irs' new
+  where
+    (genes',irs') = minimum . Vec.iterateN (Vec.length genes) rotate $ (genes,irs)
+    rotate (gs,is) = (Vec.tail gs Vec.++ Vec.take 1 gs, Vec.tail is Vec.++ Vec.take 1 is)
+
 
 newtype GenesIRsR = GLR GenesIRs deriving newtype (Show, Genome, Chromosome, IntergenicChromosome, Orientable)
 
 newtype GenesIRsF = GLF GenesIRs deriving newtype (Show, Genome, Chromosome, IntergenicChromosome, Orientable)
 
 instance Eq GenesIRsR where
-  (GLR (GenesIRs Linear sign1 genes1 irs1 _)) == (GLR (GenesIRs Linear sign2 genes2 irs2 _)) =
-    sign1 == sign2 && genes1 == genes2 && irs1 == irs2
-  (GLR (GenesIRs Circular _ _ _ _)) == (GLR (GenesIRs Circular _ _ _ _)) = undefined
   (GLR (GenesIRs Linear _ _ _ _)) == (GLR (GenesIRs Circular _ _ _ _)) = False
   (GLR (GenesIRs Circular _ _ _ _)) == (GLR (GenesIRs Linear _ _ _ _)) = False
+  GLR g1 == GLR g2 =
+    sign1 == sign2 && genes1 == genes2 && irs1 == irs2
+    where
+      (GenesIRs _ sign1 genes1 irs1 _) = canonicPosition g1
+      (GenesIRs _ sign2 genes2 irs2 _) = canonicPosition g2
 
-mkMCRGenome :: [Gene] -> [GenesIRsR] -> MultiGIs GenesIRsR
-mkMCRGenome = MultiGIs
+instance Eq (MultiGIs GenesIRsR) where
+  (MultiGIs _ g1s) == (MultiGIs _ g2s) = g1s == g2s
 
-mkRGenome :: ChromType -> Bool -> Sign -> [Int] -> [Int] -> GenesIRsR
+toMC :: GenesIRsR -> MultiGIs GenesIRsR
+toMC g' = MultiGIs [getGene 1 g', getGene (mkIdx (size g')) g'] [g']
+
+-- Make an Rigid Genome with the given chromosome type, genes, and intergenic regions. The Maybe indicates if the genome have to be extended and which integers to use on the extension. The sign indicates if the genes are signed or unsigned.
+mkRGenome :: ChromType -> Maybe (Int,Int) -> Sign -> [Int] -> [Int] -> GenesIRsR
 mkRGenome chtype ext sign genes_ irs = GLR $ GenesIRs chtype sign (Vec.fromList . coerce $ genes) (Vec.fromList . map R $ irs) (Gene new)
   where
-    genes = if ext then 0 : (genes_ ++ [maxBound]) else genes_
+    genes = case ext of
+              Just (b,e) -> b : (genes_ ++ [e])
+              Nothing -> genes_
     new = maximum (map abs genes_) + 1
 
 mkRGenome0 :: ChromType -> Sign -> [Int] -> GenesIRsR
-mkRGenome0 chtype sign genes = mkRGenome chtype True sign genes (replicate (length genes - 1) 0)
+mkRGenome0 chtype sign genes = mkRGenome chtype (Just (0,maxBound)) sign genes (replicate (length genes - 1) 0)
 
-mkFGenome :: ChromType -> Bool -> Sign -> [Int] -> [(Int, Int)] -> GenesIRsF
+-- Make an Flexible Genome (arguments are similar as mkRGenome)
+mkFGenome :: ChromType -> Maybe (Int,Int) -> Sign -> [Int] -> [(Int, Int)] -> GenesIRsF
 mkFGenome chtype ext sign genes_ irs = GLF $ GenesIRs chtype sign (Vec.fromList . coerce $ genes) (Vec.fromList . map (uncurry F) $ irs) (Gene new)
   where
-    genes = if ext then 0 : (genes_ ++ [maxBound]) else genes_
+    genes = case ext of
+              Just (b,e) -> b : (genes_ ++ [e])
+              Nothing -> genes_
     new = maximum (map abs genes_) + 1
 
 mkFGenome0 :: ChromType -> Sign -> [Int] -> GenesIRsF
-mkFGenome0 chtype sign genes = mkFGenome chtype True sign genes (replicate (length genes - 1) (0, 0))
+mkFGenome0 chtype sign genes = mkFGenome chtype (Just (0,maxBound)) sign genes (replicate (length genes - 1) (0, 0))
 
 writeIR :: IR -> BS.ByteString
 writeIR ir = LBS.toStrict $ case ir of
@@ -439,7 +466,23 @@ writeIR ir = LBS.toStrict $ case ir of
 splitElements :: BS.ByteString -> [BS.ByteString]
 splitElements = filter (not . BS.null) . BS.splitWith (\x -> x == ',' || x == ' ')
 
-readRGenome :: ChromType -> Bool -> Sign -> BS.ByteString -> BS.ByteString -> GenesIRsR
+readMCGenome :: (ChromType -> Maybe (Int,Int) -> Sign -> BS.ByteString -> BS.ByteString -> a) -> Sign -> BS.ByteString -> BS.ByteString -> MultiGIs a
+readMCGenome reader sign bs_genes bs_irs = MultiGIs ext chroms
+  where
+    ext = [0]
+    chroms = zipWith3 (\chtype gs irs -> reader chtype (Just (0,0)) sign gs irs) types bs_genes_split_clean bs_irs_split
+    types = map (\bs -> if BS.head bs == 'C' then Circular else Linear) bs_genes_split
+    bs_genes_split = map (BS.dropWhile (== ' ')) $ BS.split ';' bs_genes
+    bs_genes_split_clean = map (BS.dropWhile (\c -> c == 'C' || c == 'L')) bs_genes_split
+    bs_irs_split = BS.split ';' bs_irs
+
+readMCRGenome :: Sign -> BS.ByteString -> BS.ByteString -> MultiGIs GenesIRsR
+readMCRGenome = readMCGenome readRGenome
+
+readMCFGenome :: Sign -> BS.ByteString -> BS.ByteString -> MultiGIs GenesIRsF
+readMCFGenome = readMCGenome readFGenome
+
+readRGenome :: ChromType -> Maybe (Int,Int) -> Sign -> BS.ByteString -> BS.ByteString -> GenesIRsR
 readRGenome chtype extend sign bs_genes bs_irs = mkRGenome chtype extend sign genes irs
   where
     readInt = fst . fromJust . BS.readInt
@@ -455,7 +498,7 @@ writeRGenome rext g@(GLR (GenesIRs _ _ genes irs _)) =
     l_genes = Vec.toList . (if rext && isLinear g then Vec.slice 1 (size g - 2) else id) $ genes
     l_irs = (\case R i -> i; F _ _ -> error patternError) <$> Vec.toList irs
 
-readFGenome :: ChromType -> Bool -> Sign -> BS.ByteString -> BS.ByteString -> GenesIRsF
+readFGenome :: ChromType -> Maybe (Int,Int) -> Sign -> BS.ByteString -> BS.ByteString -> GenesIRsF
 readFGenome chtype extend sign bs_genes bs_irs = mkFGenome chtype extend sign genes irs
   where
     readInt = fst . fromJust . BS.readInt
@@ -729,8 +772,8 @@ instance RigidIntergenicMultiChromGenome (MultiGIs GenesIRsR) where
         (_, []) -> error indexError
         (hgs, g : tgs) -> if isLinear g then hgs ++ (g1 : g2 : tgs) else hgs ++ (g' : tgs)
           where
-            sig = if hasOri g then Signed else Unsigned
-            cap = mkRGenome Linear False sig [geneToInt . head . caps $ mc] []
+            sig = if hasSigns g then Signed else Unsigned
+            cap = mkRGenome Linear Nothing sig [geneToInt . head . caps $ mc] []
             ir_idx = getIR i g
             g1 = combine (subGenome 1 i g) (R x) cap
             g2 = combine cap (sumIR ir_idx (R (-x))) (subGenome (i + 1) (mkIdx (size g)) g)
@@ -784,14 +827,14 @@ instance Matcher RigidRigidDirectMatcher GenesIRsR GenesIRsR where
 
 instance Matcher RigidFlexibleDirectMatcher GenesIRsR GenesIRsF where
   isMatch = isDirectMatch
-  isDirectMatch RFDM (GLR (GenesIRs Linear _ genesG irsG _)) (GLF (GenesIRs Linear _ genesH irsH _)) =
-    genesG == genesH && and (Vec.zipWith check irsG irsH)
+  isDirectMatch RFDM (GLR g1) (GLF g2) =
+    chtypeG == chtypeH && genesG == genesH && and (Vec.zipWith check irsG irsH)
     where
+      (GenesIRs chtypeG _ genesG irsG _) = canonicPosition g1
+      (GenesIRs chtypeH _ genesH irsH _) = canonicPosition g2
       check :: IR -> IR -> Bool
       check (R ir) (F irl irr) = (irl <= ir) && (ir <= irr)
       check _ _ = error patternError
-  isDirectMatch RFDM (GLR (GenesIRs Circular _ _ _ _)) (GLF _) = undefined
-  isDirectMatch RFDM (GLR _) (GLF (GenesIRs Circular _ _ _ _)) = undefined
   isReverseMatch _ _ _ = False
   areBalanced _ (GLR (GenesIRs _ _ genesG irsG _)) (GLF (GenesIRs _ _ genesH irsH _)) =
     List.sort (fmap canonicOri (Vec.toList genesG)) == List.sort (fmap canonicOri (Vec.toList genesH))
@@ -833,7 +876,7 @@ randomGenome zeros n lim signed = do
     Unsigned -> take n <$> getRandomRs (1 :: Gene, coerce lim)
     Signed -> zipWith swaps coins . take n <$> getRandomRs (1 :: Gene, coerce lim)
   li <- take (n + 1) <$> if zeros then return (repeat 0) else getRandomRs (1, 100)
-  return $ mkRGenome Linear True signed (coerce ls) li
+  return $ mkRGenome Linear (Just (0,maxBound)) signed (coerce ls) li
   where
     swaps b v = if b then v else invOri v
 
@@ -851,7 +894,7 @@ randomGenomeWithReplicas zeros n rep low high signed = do
           . zipWith replicate occs
           $ [Gene 1 .. Gene rep]
   li <- take (n + 1) <$> if zeros then return (repeat 0) else getRandomRs (1, 100)
-  return $ mkRGenome Linear True signed (coerce ls) li
+  return $ mkRGenome Linear (Just (0,maxBound)) signed (coerce ls) li
   where
     swaps b v = if b then v else invOri v
 
@@ -865,6 +908,6 @@ shuffleGenome g@(GLR (GenesIRs chtype sign ls_ li _)) = do
     Signed -> zipWith swaps coins <$> shuffleM ls
   x <- List.sort . take (size g) <$> getRandomRs (0, s)
   let li' = zipWith (-) (x ++ [s]) (0 : x)
-  return $ mkRGenome chtype True sign (coerce ls') li'
+  return $ mkRGenome chtype (Just (0,maxBound)) sign (coerce ls') li'
   where
     swaps b v = if b then v else invOri v

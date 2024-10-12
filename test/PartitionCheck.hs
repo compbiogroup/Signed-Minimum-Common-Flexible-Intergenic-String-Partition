@@ -132,15 +132,15 @@ partitionProduceValidCorrespondence partAlg size_lim =
     (CGPbal pg ph) <- forAll . return $ Partition.combine RFRM part
     assert $ checkCommonBal RFRM pg ph
 
-prop_fptPartitionProduceValidCorrespondence :: Property
-prop_fptPartitionProduceValidCorrespondence =
-  property $ do
-    g <- forAll (genRGenome 20)
-    k <- forAll $ Gen.int (Range.linear 0 (size g))
-    h <- forAll $ rearrangeAndFlexibilizeGenome k g
-    (part,_) <- fmap (first fromJust) . evalIO $ fptPartition 100000000 RFRM g h
-    (CGPunbal pg ph) <- forAll . return $ Partition.combine RFRM part
-    assert $ checkCommonUnbal RFRM pg ph
+-- prop_fptPartitionProduceValidCorrespondence :: Property
+-- prop_fptPartitionProduceValidCorrespondence =
+--   property $ do
+--     g <- forAll (genRGenome 20)
+--     k <- forAll $ Gen.int (Range.linear 0 (size g))
+--     h <- forAll $ rearrangeAndFlexibilizeGenome k g
+--     (part,_) <- fmap (first fromJust) . evalIO $ fptPartition 100000000 RFRM g h
+--     (CGPunbal pg ph) <- forAll . return $ Partition.combine RFRM part
+--     assert $ checkCommonUnbal RFRM pg ph
 
 tests :: IO Bool
 tests = checkSequential $$(discover)

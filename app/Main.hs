@@ -27,6 +27,8 @@ import PSOAR (soarPartition)
 import Partition (CommonPartition, getBlocksCorrespondence, writePartition)
 import Text.Printf (printf)
 
+-- TODO: Make necessary adaptations to include multiple and circular chromosomes in the partition algorithms
+
 data Args = Args
   { partAlg :: PartitionAlgorithm,
     input :: String,

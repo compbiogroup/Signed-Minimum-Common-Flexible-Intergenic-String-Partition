@@ -213,7 +213,6 @@ main = do
     fromQuadruples ((s1, i1, s2, i2) : ss) = s1 : i1 : s2 : i2 : fromQuadruples ss
     fromQuadruples [] = []
 
--- TODO: Produce genomes with dcj and indels
 genPair :: Args -> [FlexLevel] -> Rand StdGen [(ByteString, ByteString, ByteString, ByteString)]
 genPair Args {..} flex_levels = do
   g <- case db_par of
@@ -222,20 +221,20 @@ genPair Args {..} flex_levels = do
   -- floor of nop for orig and ceil for target
   let nop_orig = db_nop `div` 2
       nop_target = db_nop - nop_orig
+  -- If dcj produce the final g after dcj operations
   g_final <- if db_mult_chrom && db_nop > 0 then applyDCJs (toMC g) nop_orig else return (toMC g)
+  -- Apply indels
+  g_indel <- applyIndels g
+  -- Apply operations (rev/trans or dcj) to create h
   h <-
     if db_mult_chrom && db_nop /= 0
-      then (`applyDCJs` nop_target) =<< (toMC <$> applyIndels g)
+      then applyDCJs (toMC g_indel) nop_target
       else
-        toMC
-          <$> ( applyIndels
-                  =<< if db_nop == -1
-                    then shuffleGenome g
-                    else applyOperations g
-              )
+        toMC <$> if db_nop == -1
+                    then shuffleGenome g_indel
+                    else applyOperations g_indel
   return $ genBS g_final h
   where
-    toMC g' = mkMCRGenome [getGene 1 g', getGene (mkIdx (size g')) g'] [g']
     genBS g h =
       map
         ( \f ->
@@ -249,7 +248,7 @@ genPair Args {..} flex_levels = do
         flex_levels
       where
         (s1, i1) = writeMultiC (writeRGenome True) g
-    
+
     -- floor of nop for r_r and ceil for r_t
     r_r = (db_nop * db_porc) `div` 100
     r_t = db_nop - r_r

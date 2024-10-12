@@ -11,8 +11,6 @@ import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import LocalBase
 
--- TODO: test cut and join
-
 genGene :: Gen Int
 genGene = Gen.int (Range.linear 1 100)
 
@@ -172,6 +170,13 @@ prop_occurrenceWithGeneMapImplementationWorks = property $ do
   i <- forAll (Gen.int (Range.linear 1 (size g)))
   let a = canonicOri (getGene (mkIdx i) g)
   occurrence (positionMap g) a === (sum . fmap (\i' -> if abs (getGene (mkIdx i') g) == a then 1 else 0) $ [1 .. size g])
+
+prop_joinIsInverseOfCut :: Property
+prop_joinIsInverseOfCut = property $ do
+  g <- toMC <$> forAll (genRGenome 100)
+  chr_i <- mkIdx <$> forAll (Gen.int (Range.linear (1 :: Int) (numChromosomes g)))
+  i <- mkIdx <$> forAll (Gen.int (Range.linear (1 :: Int) (size $ getChromosome chr_i g)))
+  (join chr_i (chr_i + 1) False False False . cut (chr_i,i) 0 $ g) === g
 
 tests :: IO Bool
 tests = checkSequential $$(discover)

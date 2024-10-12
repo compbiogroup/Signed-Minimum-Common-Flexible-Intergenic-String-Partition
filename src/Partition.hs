@@ -48,6 +48,7 @@ import Data.Sequence qualified as Seq
 import Data.Set qualified as Set
 import Genomes (GenesIRsF, GenesIRsR, Genome (..), IR, Idx, IntergenicChromosome (..), Matcher (..), geneMapLookup, incIdx, mkIdx, positionMap, writeFGenome, writeIR, writeRGenome)
 import LocalBase
+import Data.Either (isLeft)
 
 type Breakpoints = EnumSet Idx
 
@@ -106,12 +107,35 @@ costBalanced :: CommonPartition g1 g2 -> Int
 costBalanced (CGPbal (GP _ bs _ _) _) = length bs
 costBalanced (CGPunbal _ _) = error patternError
 
--- | Cost of a common partittion, given by the number of breakpoints in G plus the number of exclusive blocks in H
-costUnbalanced :: CommonPartition g1 g2 -> Int
-costUnbalanced (CGPbal (GP _ bs _ _) _) = length bs
-costUnbalanced (CGPunbal (GP _ bs _ _) _) = length bs + exclusive
+-- | Cost of a common partittion, given by the number of breakpoints in H plus the number of exclusive blocks in G (this is the same as the number of breakpoints in G plus the number of exclusive blocks in H)
+costUnbalanced :: (Matcher m g1 g2) => m g1 g2 -> CommonPartition g1 g2 -> Int
+costUnbalanced _ (CGPbal _ (GP _ bs _ _)) = length bs
+costUnbalanced matcher part@(CGPunbal _ (GP _ bs _ _)) = length bs + exclusive
   where
-    exclusive = undefined
+    exclusive = length $ filter (`Map.member` final_blocks_fit)  [1..length corresp]
+    final_blocks_fit = foldr selectBlock Map.empty [1..length corresp]
+    corresp = getBlocksCorrespondence matcher part
+
+    -- try to fit block b_g1 of g1 with a block of g2 (moving blocks if necessary)
+    -- seen indicates which matched blocks of g2 we already try to move
+    -- blocks_fit indicates where blocks from g1 are matched in block of g2
+    selectBlock b_g1 blocks_fit_ = 
+        case foldrM tryFit (Set.empty, blocks_fit_) (corresp !! b_g1) of
+          Left final_blocks_fit_ -> final_blocks_fit_ -- b_g1 can be fit in b_g2
+          Right _ -> blocks_fit_ -- could not fit b_g1
+      where
+        tryFit b_g2 (seen, blocks_fit) =
+          if
+            | b_g2 `Set.member` seen -> Right (seen', blocks_fit)
+            | b_g2 `Map.notMember` blocks_fit -> Left (Map.insert b_g1 b_g2 blocks_fit)
+            | freed_b_g2 -> Left blocks_fit'
+            | otherwise -> Right (seen', blocks_fit)
+            where
+              (freed_b_g2, blocks_fit') =
+                case tryFit (blocks_fit Map.! b_g2) (seen', blocks_fit) of
+                    Right _ -> (False, error patternError)
+                    Left blocks_fit'_ -> (True, Map.insert b_g1 b_g2 blocks_fit'_)
+              seen' = Set.insert b_g2 seen
 
 -- | Verify if the elements of pg can be assign to elements of ph with a perfect
 -- match.
@@ -141,7 +165,7 @@ findUncommon matcher pg ph =
         block_indices = map snd . sortWith (negate . fst) $ zip (map Genomes.size bsG) [0 .. length cors - 1]
 
         -- Select block from ph that corresponds to block in position i of pg.
-        -- fixCorres saves with blocks of pg are fixed in which blocks of ph (indices starting in 0).
+        -- fixCorres saves which blocks of pg are fixed in which blocks of ph (indices starting in 0).
         selectBlock seen i fixCorres =
           if done then Right fixCorres' else Left (i, fixCorres')
           where
@@ -193,7 +217,7 @@ writePartition cp = (genes_bs_g, irs_bs_g, genes_bs_h, irs_bs_h)
     bssg = map (writeRGenome False) . blocks $ pg
     bssh = map (writeFGenome False) . blocks $ ph
 
--- | For each block in S, the correspondent positions of blocks in P, indices starting in 0
+-- | For each block in pg, the correspondent positions of blocks in pg, indices starting in 0
 getBlocksCorrespondence :: (Matcher m g1 g2) => m g1 g2 -> CommonPartition g1 g2 -> [[Int]]
 getBlocksCorrespondence matcher (CGPbal pg ph) = getBlocksCorrespondence_ matcher pg ph
 getBlocksCorrespondence matcher (CGPunbal pg ph) = getBlocksCorrespondence_ matcher pg ph

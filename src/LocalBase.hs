@@ -27,9 +27,6 @@ class Orientable o where
   -- Invert orientation
   invOri :: o -> o
 
-  -- Check if there is two orientations
-  hasOri :: o -> Bool
-
 canonicOri :: (Orientable o) => o -> o
 -- ^ Transform a Orientable to canonical orientation (LR)
 canonicOri o = if getOri o == LR then o else invOri o
