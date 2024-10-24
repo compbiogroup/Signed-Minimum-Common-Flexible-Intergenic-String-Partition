@@ -142,6 +142,8 @@ partitionProduceValidCorrespondence partAlg size_lim =
 --     (CGPunbal pg ph) <- forAll . return $ Partition.combine RFRM part
 --     assert $ checkCommonUnbal RFRM pg ph
 
+-- TODO: test mkPartitionFromBreakpoints and mkPartitionFromBlocks
+
 tests :: IO Bool
 tests = checkSequential $$(discover)
 -- tests = check prop_fptPartitionProduceValidCorrespondence

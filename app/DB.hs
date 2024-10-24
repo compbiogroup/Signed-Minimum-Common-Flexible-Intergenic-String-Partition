@@ -276,7 +276,7 @@ genPair Args {..} flex_levels = do
       let ops = unfoldr operations_for_one (r_t, r_r, coins)
       foldr (=<<) (return g) ops
 
-    applyDCJs :: MultiGIs GenesIRsR -> Int -> Rand StdGen (MultiGIs GenesIRsR)
+    applyDCJs :: ChromList GenesIRsR -> Int -> Rand StdGen (ChromList GenesIRsR)
     applyDCJs g 0 = return g
     applyDCJs g nop = do
       let crhs_idxs = filter (\idx -> let chr = getChromosome idx g in size chr > 1 || isCircular chr && size chr > 0) [1..mkIdx (numChromosomes g)]

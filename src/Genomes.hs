@@ -45,7 +45,7 @@ module Genomes
     geneMapAdjust,
     occurrenceMax,
     singletonOnBoth,
-    MultiGIs,
+    ChromList,
     GenesIRsR,
     GenesIRsF,
     toMC,
@@ -168,13 +168,12 @@ instance Show GenesIRs where
       str_s = Vec.toList $ (\i -> if i == maxBound then "inf" else show i) <$> genes
       str_i = Vec.toList $ show <$> irs
 
--- Representation with multiple lists of genes and multiple lists of intergenic regions
--- (only ints for rigid, or intervals for flexible). Each list represent a linear or circular chromosome.
--- make sure the genes on the extremities of linear chromosomes are always in the caps list.
-data MultiGIs c = MultiGIs {caps :: [Gene], chromosomes :: [c]}
+-- Representation with a list of chromosomes.
+-- A list of caps is required, so make sure the genes on the extremities of linear chromosomes are always in the caps list.
+data ChromList c = ChromList {caps :: [Gene], chromosomes :: [c]}
 
-instance (Show c) => Show (MultiGIs c) where
-  show (MultiGIs _ chroms) = unwords . intersperse " | " . map show $ chroms
+instance (Show c) => Show (ChromList c) where
+  show (ChromList _ chroms) = unwords . intersperse " | " . map show $ chroms
 
 -- TODO: make Idx a TypeFamily of Genome
 class Genome g where
@@ -234,11 +233,17 @@ class (Genome g) => Chromosome g where
 
 class (Genome g) => MultiChromosome g where
   type Chrom g
+  -- get chromosome at position i (index starts in 1), requires 1 <= i <= numChromosomes g
   getChromosome :: Idx -> g -> Chrom g
+  -- number of chromosomes in the genome
   numChromosomes :: g -> Int
+
+  getChromosomes :: g -> [Chrom g]
+  getChromosomes g = map (`getChromosome` g) [1..mkIdx (numChromosomes g)]
 
 class (Chromosome g) => IntergenicChromosome g where
   intergenicFullReversal :: g -> g
+  -- get the ith intergenic region (starting from 1), in extended/closed chromosomes this is the intergenic region after the ith gene
   getIR :: Idx -> g -> IR
 
 class (IntergenicChromosome g) => RigidIntergenicChromosome g where
@@ -351,7 +356,7 @@ instance Chromosome GenesIRs where
   isLinear (GenesIRs Linear _ _ _ _) = True
   isLinear (GenesIRs Circular _ _ _ _) = False
 
-instance Genome c => Genome (MultiGIs c) where
+instance Genome c => Genome (ChromList c) where
   isGene gene = any (isGene gene) . chromosomes
   size = sum . map size . chromosomes
   getGene i = findGene i . chromosomes
@@ -363,13 +368,13 @@ instance Genome c => Genome (MultiGIs c) where
   invGene g = invGene (head . chromosomes $ g)
   setGenes idxs genes mc = foldr setGene mc (zip idxs genes)
     where
-      setGene (i, gene) = MultiGIs (caps mc) . findChrom [] i . chromosomes
+      setGene (i, gene) = ChromList (caps mc) . findChrom [] i . chromosomes
         where
           findChrom gs_old idx (g : gs) =
             let s = size g
              in if idx <= mkIdx s then reverse gs_old ++ (setGenes [idx] [gene] g : gs) else findChrom (g : gs_old) (idx - mkIdx s) gs
           findChrom _ _ [] = error indexError
-  subGenome idxi0 idxj0 mc = MultiGIs (caps mc) . findChrom [] idxi0 idxj0 . chromosomes $ mc
+  subGenome idxi0 idxj0 mc = ChromList (caps mc) . findChrom [] idxi0 idxj0 . chromosomes $ mc
     where
       findChrom gs_old idxi idxj (g : gs) =
         let s = size g
@@ -428,11 +433,11 @@ instance Eq GenesIRsR where
       (GenesIRs _ sign1 genes1 irs1 _) = canonicPosition g1
       (GenesIRs _ sign2 genes2 irs2 _) = canonicPosition g2
 
-instance Eq (MultiGIs GenesIRsR) where
-  (MultiGIs _ g1s) == (MultiGIs _ g2s) = g1s == g2s
+instance Eq (ChromList GenesIRsR) where
+  (ChromList _ g1s) == (ChromList _ g2s) = g1s == g2s
 
-toMC :: GenesIRsR -> MultiGIs GenesIRsR
-toMC g' = MultiGIs [getGene 1 g', getGene (mkIdx (size g')) g'] [g']
+toMC :: GenesIRsR -> ChromList GenesIRsR
+toMC g' = ChromList [getGene 1 g', getGene (mkIdx (size g')) g'] [g']
 
 -- Make an Rigid Genome with the given chromosome type, genes, and intergenic regions. The Maybe indicates if the genome have to be extended and which integers to use on the extension. The sign indicates if the genes are signed or unsigned.
 mkRGenome :: ChromType -> Maybe (Int,Int) -> Sign -> [Int] -> [Int] -> GenesIRsR
@@ -466,8 +471,8 @@ writeIR ir = LBS.toStrict $ case ir of
 splitElements :: BS.ByteString -> [BS.ByteString]
 splitElements = filter (not . BS.null) . BS.splitWith (\x -> x == ',' || x == ' ')
 
-readMCGenome :: (ChromType -> Maybe (Int,Int) -> Sign -> BS.ByteString -> BS.ByteString -> a) -> Sign -> BS.ByteString -> BS.ByteString -> MultiGIs a
-readMCGenome reader sign bs_genes bs_irs = MultiGIs ext chroms
+readMCGenome :: (ChromType -> Maybe (Int,Int) -> Sign -> BS.ByteString -> BS.ByteString -> a) -> Sign -> BS.ByteString -> BS.ByteString -> ChromList a
+readMCGenome reader sign bs_genes bs_irs = ChromList ext chroms
   where
     ext = [0]
     chroms = zipWith3 (\chtype gs irs -> reader chtype (Just (0,0)) sign gs irs) types bs_genes_split_clean bs_irs_split
@@ -476,10 +481,10 @@ readMCGenome reader sign bs_genes bs_irs = MultiGIs ext chroms
     bs_genes_split_clean = map (BS.dropWhile (\c -> c == 'C' || c == 'L')) bs_genes_split
     bs_irs_split = BS.split ';' bs_irs
 
-readMCRGenome :: Sign -> BS.ByteString -> BS.ByteString -> MultiGIs GenesIRsR
+readMCRGenome :: Sign -> BS.ByteString -> BS.ByteString -> ChromList GenesIRsR
 readMCRGenome = readMCGenome readRGenome
 
-readMCFGenome :: Sign -> BS.ByteString -> BS.ByteString -> MultiGIs GenesIRsF
+readMCFGenome :: Sign -> BS.ByteString -> BS.ByteString -> ChromList GenesIRsF
 readMCFGenome = readMCGenome readFGenome
 
 readRGenome :: ChromType -> Maybe (Int,Int) -> Sign -> BS.ByteString -> BS.ByteString -> GenesIRsR
@@ -532,8 +537,8 @@ flexibilize l (GLR (GenesIRs chtype sign genes irs new)) = GLF $ GenesIRs chtype
   where
     irs' = (\i -> F (i - (l * i `div` 100)) (i + (l * i `div` 100))) . irToInt <$> irs
 
-flexibilizeMC :: Int -> MultiGIs GenesIRsR -> MultiGIs GenesIRsF
-flexibilizeMC l (MultiGIs caps_ chrs) = MultiGIs caps_ (map (flexibilize l) chrs)
+flexibilizeMC :: Int -> ChromList GenesIRsR -> ChromList GenesIRsF
+flexibilizeMC l (ChromList caps_ chrs) = ChromList caps_ (map (flexibilize l) chrs)
 
 -- TODO: Adapt operations to allow circular indices
 instance RigidIntergenicChromosome GenesIRsR where
@@ -648,17 +653,12 @@ instance RigidIntergenicChromosome GenesIRsR where
           Vec.++ vix
           Vec.++ Vec.slice (coerce i) (Vec.length vi - coerce i) vi
 
-instance MultiChromosome (MultiGIs GenesIRsR) where
-  type Chrom (MultiGIs GenesIRsR) = GenesIRsR
-  getChromosome idx (MultiGIs _ chroms) = chroms !! (idxToInt idx - 1)
+instance (Genome g) => MultiChromosome (ChromList g) where
+  type Chrom (ChromList g) = g
+  getChromosome idx (ChromList _ chroms) = chroms !! (idxToInt idx - 1)
   numChromosomes = length . chromosomes
 
-instance MultiChromosome (MultiGIs GenesIRsF) where
-  type Chrom (MultiGIs GenesIRsF) = GenesIRsF
-  getChromosome idx (MultiGIs _ chroms) = chroms !! (idxToInt idx - 1)
-  numChromosomes = length . chromosomes
-
-instance RigidIntergenicMultiChromGenome (MultiGIs GenesIRsR) where
+instance RigidIntergenicMultiChromGenome (ChromList GenesIRsR) where
   intergenicDCJ (chri, i) (chrj, j) connectAC x y mc =
     assert (1 <= chri)
       . assert (chri <= chrj)
@@ -767,7 +767,7 @@ instance RigidIntergenicMultiChromGenome (MultiGIs GenesIRsR) where
       ir_y = irToInt (getIR j chr_j)
 
   cut (chr, i) x mc =
-    MultiGIs (caps mc) $
+    ChromList (caps mc) $
       case splitAt (idxToInt chr - 1) . chromosomes $ mc of
         (_, []) -> error indexError
         (hgs, g : tgs) -> if isLinear g then hgs ++ (g1 : g2 : tgs) else hgs ++ (g' : tgs)
@@ -782,7 +782,7 @@ instance RigidIntergenicMultiChromGenome (MultiGIs GenesIRsR) where
     if chri > chrj
       then join chrj chri move_first invj invi mc
       else
-        MultiGIs (caps mc) $
+        ChromList (caps mc) $
           let (gs1, gs23) = splitAt (idxToInt chri - 1) . chromosomes $ mc
            in case splitAt (idxToInt (chrj - chri)) gs23 of
                 (_, []) -> error indexError
@@ -793,7 +793,7 @@ instance RigidIntergenicMultiChromGenome (MultiGIs GenesIRsR) where
                     gi' = if invi then intergenicFullReversal gi else gi
                     gj' = if invj then intergenicFullReversal gj else gj
 
-  turnCircularAtIndex chri mc = MultiGIs (caps mc) . replace (idxToInt chri - 1) turnCircular . chromosomes $ mc
+  turnCircularAtIndex chri mc = ChromList (caps mc) . replace (idxToInt chri - 1) turnCircular . chromosomes $ mc
 
 class Matcher m g1 g2 where
   isMatch :: m g1 g2 -> g1 -> g2 -> Bool

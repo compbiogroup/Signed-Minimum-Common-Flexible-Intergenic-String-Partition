@@ -21,7 +21,7 @@ module Partition
     findUncommon,
     costBalanced,
     costUnbalanced,
-    CommonPartition (CGPbal,CGPunbal),
+    CommonPartition (CGPbal, CGPunbal),
     mkCommonPartition,
     mkCommonPartition2,
     combine,
@@ -38,50 +38,75 @@ where
 -- Maintainer  : gabriel.gabrielhs@gmail.com
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS
-import Data.EnumSet (EnumSet)
 import Data.EnumSet qualified as EnumSet
 import Data.Foldable (foldrM, toList)
 import Data.Map qualified as Map
 import Data.Maybe (isNothing)
 import Data.Sequence (Seq (Empty, (:<|), (:|>)), (><))
 import Data.Sequence qualified as Seq
+import Data.Set (Set)
 import Data.Set qualified as Set
-import Genomes (GenesIRsF, GenesIRsR, Genome (..), IR, Idx, IntergenicChromosome (..), Matcher (..), geneMapLookup, incIdx, mkIdx, positionMap, writeFGenome, writeIR, writeRGenome)
+import Genomes (ChromList, GenesIRsF, GenesIRsR, Genome (..), IR, Idx, IntergenicChromosome (..), Matcher (..), MultiChromosome (..), geneMapLookup, incIdx, decIdx, mkIdx, positionMap, writeFGenome, writeIR, writeRGenome)
 import LocalBase
 import Data.Either (isLeft)
 
-type Breakpoints = EnumSet Idx
+type Breakpoints = Set (Idx, Idx)
 
 data Partition g where
-  GP :: (Genome g) => g -> [g] -> Breakpoints -> Int -> Partition g
+  -- Underlining Genome, Blocks, Breakpoints, Number of Blocks.
+  -- The separation between the blocks are the breakpoints and the natural separation of the chromosomes.
+  GP :: (Genome g) => ChromList g -> [g] -> Breakpoints -> Int -> Partition g
 
 instance (Eq g) => Eq (Partition g) where
   (GP g1 bs1 bps1 n1) == (GP g2 bs2 bps2 n2) = g1 == g2 && bs1 == bs2 && bps1 == bps2 && n1 == n2
 
-mkPartitionFromBreakpoints :: (Genome g) => g -> Breakpoints -> Partition g
-mkPartitionFromBreakpoints g bps = GP g bs bps (EnumSet.size bps + 1)
+mkPartitionFromBreakpoints :: (Genome g) => ChromList g -> Breakpoints -> Partition g
+mkPartitionFromBreakpoints g bps = GP g bs bps (Set.size bps + numChromosomes g)
   where
-    bs = zipWith (\i succi -> subGenome (incIdx i) succi g) bg $ tail bg
-    bg = 0 : EnumSet.toAscList bps ++ [mkIdx (Genomes.size g)]
+    -- Get the blocks between each breakpoint, note the adjustments to take into account breakpoints in distinct chromosomes
+    bs =
+      foldr
+        ( \((chri, i), (chrsucci, succi)) acc ->
+            ( if chri == chrsucci
+                then subGenome (incIdx i) succi (getChromosome chri g) : acc
+                else
+                  let bsi = subGenome (incIdx i) (mkIdx . Genomes.size $ getChromosome chri g) (getChromosome chri g)
+                      copied_chrs = map (`getChromosome` g) [incIdx chri .. decIdx chrsucci]
+                      bsucci = subGenome 1 succi (getChromosome chrsucci g)
+                  in  bsi : copied_chrs ++ bsucci : acc
+            )
+        )
+        []
+        . zip bg
+        $ tail bg
+    bg = (1, 0) : Set.toAscList bps ++ [(mkIdx (Genomes.numChromosomes g), mkIdx (Genomes.size g))]
 
 -- | Make a partition from a list of blocks.
 -- The blocks of @bs@ must concatenate into the genome @g@ and @g@ cannot have size 0.
-mkPartitionFromBlocks :: (Genome g) => g -> [g] -> Partition g
+mkPartitionFromBlocks :: (Genome g) => ChromList g -> [g] -> Partition g
 mkPartitionFromBlocks g bs = GP g bs bps (length bs)
   where
-    bps = EnumSet.fromAscList . scanl1 (+) . map (mkIdx . Genomes.size) $ init bs
+    chr_sizes_0 = map Genomes.size . getChromosomes $ g
+    b_sizes_0 = map Genomes.size bs
+    bps = Set.fromList $ go chr_sizes_0 b_sizes_0 (mkIdx 1) (mkIdx 0) []
+    go [] [] _ _ acc = acc
+    go (chr_size:chr_sizes) (b_size:b_sizes) chri i acc =
+      if | b_size < chr_size -> go (chr_size - b_size:chr_sizes) b_sizes chri (i + mkIdx b_size) ((chri,i + mkIdx b_size):acc)
+         | b_size == chr_size -> go chr_sizes b_sizes (chri + 1) 0 acc
+         | otherwise -> error logicError
+    go _ _ _ _ _ = error logicError
 
-underlineGenome :: Partition p -> p
+underlineGenome :: Partition p -> ChromList p
 underlineGenome (GP g _ _ _) = g
 
-trivialPartition :: Genome g => g -> Partition g
-trivialPartition g = GP g [g] EnumSet.empty 1
+trivialPartition :: (Genome g) => ChromList g -> Partition g
+trivialPartition g = GP g (getChromosomes g) Set.empty 1
 
 breakpoints :: Partition g -> Breakpoints
 breakpoints (GP _ _ bps _) = bps
 
-breakpointsIdx :: Partition g -> [Idx]
-breakpointsIdx (GP _ _ bps _) = EnumSet.toAscList bps
+breakpointsIdx :: Partition g -> [(Idx,Idx)]
+breakpointsIdx (GP _ _ bps _) = Set.toAscList bps
 
 breakpointsIR :: (IntergenicChromosome g) => Partition g -> [IR]
 breakpointsIR gp@(GP g _ _ _) = map (`getIR` g) (breakpointsIdx gp)
@@ -98,9 +123,10 @@ data CommonPartition g1 g2 where
 
 mkCommonPartition :: (Matcher m g1 g2, Genome g1, Genome g2) => m g1 g2 -> Partition g1 -> Partition g2 -> CommonPartition g1 g2
 mkCommonPartition matcher pg ph =
-  if | checkCommonBal matcher pg ph -> CGPbal pg ph
-     | checkCommonUnbal matcher pg ph -> CGPunbal pg ph
-     | otherwise -> error logicError
+  if
+    | checkCommonBal matcher pg ph -> CGPbal pg ph
+    | checkCommonUnbal matcher pg ph -> CGPunbal pg ph
+    | otherwise -> error logicError
 
 -- | Cost of a common partittion, given by the number of breakpoints in G
 costBalanced :: CommonPartition g1 g2 -> Int
@@ -112,17 +138,17 @@ costUnbalanced :: (Matcher m g1 g2) => m g1 g2 -> CommonPartition g1 g2 -> Int
 costUnbalanced _ (CGPbal _ (GP _ bs _ _)) = length bs
 costUnbalanced matcher part@(CGPunbal _ (GP _ bs _ _)) = length bs + exclusive
   where
-    exclusive = length $ filter (`Map.member` final_blocks_fit)  [1..length corresp]
-    final_blocks_fit = foldr selectBlock Map.empty [1..length corresp]
+    exclusive = length $ filter (`Map.member` final_blocks_fit) [1 .. length corresp]
+    final_blocks_fit = foldr selectBlock Map.empty [1 .. length corresp]
     corresp = getBlocksCorrespondence matcher part
 
     -- try to fit block b_g1 of g1 with a block of g2 (moving blocks if necessary)
     -- seen indicates which matched blocks of g2 we already try to move
     -- blocks_fit indicates where blocks from g1 are matched in block of g2
-    selectBlock b_g1 blocks_fit_ = 
-        case foldrM tryFit (Set.empty, blocks_fit_) (corresp !! b_g1) of
-          Left final_blocks_fit_ -> final_blocks_fit_ -- b_g1 can be fit in b_g2
-          Right _ -> blocks_fit_ -- could not fit b_g1
+    selectBlock b_g1 blocks_fit_ =
+      case foldrM tryFit (Set.empty, blocks_fit_) (corresp !! b_g1) of
+        Left final_blocks_fit_ -> final_blocks_fit_ -- b_g1 can be fit in b_g2
+        Right _ -> blocks_fit_ -- could not fit b_g1
       where
         tryFit b_g2 (seen, blocks_fit) =
           if
@@ -130,12 +156,12 @@ costUnbalanced matcher part@(CGPunbal _ (GP _ bs _ _)) = length bs + exclusive
             | b_g2 `Map.notMember` blocks_fit -> Left (Map.insert b_g1 b_g2 blocks_fit)
             | freed_b_g2 -> Left blocks_fit'
             | otherwise -> Right (seen', blocks_fit)
-            where
-              (freed_b_g2, blocks_fit') =
-                case tryFit (blocks_fit Map.! b_g2) (seen', blocks_fit) of
-                    Right _ -> (False, error patternError)
-                    Left blocks_fit'_ -> (True, Map.insert b_g1 b_g2 blocks_fit'_)
-              seen' = Set.insert b_g2 seen
+          where
+            (freed_b_g2, blocks_fit') =
+              case tryFit (blocks_fit Map.! b_g2) (seen', blocks_fit) of
+                Right _ -> (False, error patternError)
+                Left blocks_fit'_ -> (True, Map.insert b_g1 b_g2 blocks_fit'_)
+            seen' = Set.insert b_g2 seen
 
 -- | Verify if the elements of pg can be assign to elements of ph with a perfect
 -- match.
@@ -178,10 +204,10 @@ findUncommon matcher pg ph =
         testCandidates _ [] seen fixCorres = (seen, fixCorres, False)
         testCandidates i (u : us) seen fixCorres =
           if
-              | u `Set.member` seen -> testCandidates i us seen fixCorres
-              | u `Map.notMember` fixCorres -> (seen', fixCorres', True)
-              | sucess -> (seen_rec, fixCorres_rec', True)
-              | otherwise -> testCandidates i us seen_rec fixCorres_rec
+            | u `Set.member` seen -> testCandidates i us seen fixCorres
+            | u `Map.notMember` fixCorres -> (seen', fixCorres', True)
+            | sucess -> (seen_rec, fixCorres_rec', True)
+            | otherwise -> testCandidates i us seen_rec fixCorres_rec
           where
             seen' = Set.insert u seen
             fixCorres' = Map.insert u i fixCorres
@@ -204,9 +230,9 @@ instance (Show g1, Show g2) => Show (CommonPartition g1 g2) where
 writePartition :: CommonPartition GenesIRsR GenesIRsF -> (BS.ByteString, BS.ByteString, BS.ByteString, BS.ByteString)
 writePartition cp = (genes_bs_g, irs_bs_g, genes_bs_h, irs_bs_h)
   where
-    (pg,ph) = case cp of
-      CGPbal pg_ ph_ -> (pg_,ph_)
-      CGPunbal pg_ ph_ -> (pg_,ph_)
+    (pg, ph) = case cp of
+      CGPbal pg_ ph_ -> (pg_, ph_)
+      CGPunbal pg_ ph_ -> (pg_, ph_)
     genes_bs_g = combiBS $ map fst bssg
     irs_bs_g = combiBS $ interleavelists (map snd bssg) ir_breaks_g
     genes_bs_h = combiBS $ map fst bssh
@@ -259,9 +285,9 @@ blockDelsToBps seq_bs = EnumSet.fromList . init $ map (\(BlockDel _ b _) -> b) b
 combine :: (Matcher m g1 g2, Genome g1, Genome g2) => m g1 g2 -> CommonPartition g1 g2 -> CommonPartition g1 g2
 combine matcher cp = mkCommonPartition2 matcher g bg' h bh'
   where
-    (pg,ph) = case cp of
-      CGPbal pg_ ph_ -> (pg_,ph_)
-      CGPunbal pg_ ph_ -> (pg_,ph_)
+    (pg, ph) = case cp of
+      CGPbal pg_ ph_ -> (pg_, ph_)
+      CGPunbal pg_ ph_ -> (pg_, ph_)
     g = underlineGenome pg
     h = underlineGenome ph
     bg = breakpoints pg
