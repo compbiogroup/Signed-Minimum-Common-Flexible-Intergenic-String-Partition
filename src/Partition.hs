@@ -46,9 +46,8 @@ import Data.Sequence (Seq (Empty, (:<|), (:|>)), (><))
 import Data.Sequence qualified as Seq
 import Data.Set (Set)
 import Data.Set qualified as Set
-import Genomes (ChromList, GenesIRsF, GenesIRsR, Genome (..), IR, Idx, IntergenicChromosome (..), Matcher (..), MultiChromosome (..), geneMapLookup, incIdx, decIdx, mkIdx, positionMap, writeFGenome, writeIR, writeRGenome)
+import Genomes (ChromList, GenesIRsF, GenesIRsR, Genome (..), IR, Idx, IntergenicChromosome (..), Matcher (..), MultiChromosome (..), geneMapLookup, incIdx, decIdx, mkIdx, positionMap, writeFGenome, writeIR, writeRGenome, geneMapUniom, emptyGeneMap, geneMapDifference)
 import LocalBase
-import Data.Either (isLeft)
 
 type Breakpoints = Set (Idx, Idx)
 
@@ -109,7 +108,7 @@ breakpointsIdx :: Partition g -> [(Idx,Idx)]
 breakpointsIdx (GP _ _ bps _) = Set.toAscList bps
 
 breakpointsIR :: (IntergenicChromosome g) => Partition g -> [IR]
-breakpointsIR gp@(GP g _ _ _) = map (`getIR` g) (breakpointsIdx gp)
+breakpointsIR gp@(GP g _ _ _) = map (\(chri,i) -> getIR i (getChromosome chri g)) (breakpointsIdx gp)
 
 blocks :: Partition g -> [g]
 blocks (GP _ bs _ _) = bs
@@ -136,11 +135,16 @@ costBalanced (CGPunbal _ _) = error patternError
 -- | Cost of a common partittion, given by the number of breakpoints in H plus the number of exclusive blocks in G (this is the same as the number of breakpoints in G plus the number of exclusive blocks in H)
 costUnbalanced :: (Matcher m g1 g2) => m g1 g2 -> CommonPartition g1 g2 -> Int
 costUnbalanced _ (CGPbal _ (GP _ bs _ _)) = length bs
-costUnbalanced matcher part@(CGPunbal _ (GP _ bs _ _)) = length bs + exclusive
+costUnbalanced matcher (CGPunbal pg@(GP _ bs_g _ _) ph@(GP _ bs_h _ _)) = length bs_h + exclusive_g
   where
-    exclusive = length $ filter (`Map.member` final_blocks_fit) [1 .. length corresp]
-    final_blocks_fit = foldr selectBlock Map.empty [1 .. length corresp]
-    corresp = getBlocksCorrespondence matcher part
+    exclusive_g = length bs_g - num_of_common_g
+    num_of_common_g = Map.size blocks_fit
+    blocks_fit = getBlocksFit matcher pg ph
+
+getBlocksFit :: (Matcher m g1 g2) => m g1 g2 -> Partition g1 -> Partition g2 -> Map.Map Int Int
+getBlocksFit matcher pg ph = foldr selectBlock Map.empty [1 .. length corresp]
+  where
+    corresp = getBlocksCorrespondence_ matcher pg ph
 
     -- try to fit block b_g1 of g1 with a block of g2 (moving blocks if necessary)
     -- seen indicates which matched blocks of g2 we already try to move
@@ -170,9 +174,14 @@ checkCommonBal matcher pg ph = Partition.size pg == Partition.size ph && isNothi
 
 -- | Verify if the elements of pg (that are not in exclusive blocks) can be assign to elements of ph
 -- (that are not in exclusive blocks) with a perfect match.
--- TODO: Update to include exclusive blocks
-checkCommonUnbal :: (Matcher m g1 g2, Genome g1) => m g1 g2 -> Partition g1 -> Partition g2 -> Bool
-checkCommonUnbal matcher pg ph = Partition.size pg == Partition.size ph && isNothing (findUncommon matcher pg ph)
+checkCommonUnbal :: (Matcher m g1 g2) => m g1 g2 -> Partition g1 -> Partition g2 -> Bool
+checkCommonUnbal matcher pg@(GP _ bs_g _ _) ph@(GP _ bs_h _ _) = geneMapDifference gmap_g gmap_h == emptyGeneMap
+  where
+    blocks_fit_g = getBlocksFit matcher pg ph
+    blocks_fit_h = flipMap blocks_fit_g
+    to_gmap blocks_fit bs = (foldr (geneMapUniom . positionMap . snd) emptyGeneMap . filter (\(i,_) -> i `Map.notMember` blocks_fit)) $ zip [1..] bs
+    gmap_g = to_gmap blocks_fit_g bs_g
+    gmap_h = to_gmap blocks_fit_h bs_h
 
 -- | Find largest blocks that do not have sufficient correspondences between one partition and the other
 -- match.
@@ -214,7 +223,7 @@ findUncommon matcher pg ph =
             (seen_rec, fixCorres_rec, sucess) = selectBlock' seen' (fixCorres Map.! u) fixCorres
             fixCorres_rec' = Map.insert u i fixCorres_rec
 
-mkCommonPartition2 :: (Matcher m g1 g2, Genome g1, Genome g2) => m g1 g2 -> g1 -> Breakpoints -> g2 -> Breakpoints -> CommonPartition g1 g2
+mkCommonPartition2 :: (Matcher m g1 g2, Genome g1, Genome g2) => m g1 g2 -> ChromList g1 -> Breakpoints -> ChromList g2 -> Breakpoints -> CommonPartition g1 g2
 mkCommonPartition2 matcher g bg h bh = mkCommonPartition matcher (mkPartitionFromBreakpoints g bg) (mkPartitionFromBreakpoints h bh)
 
 instance (Show g) => Show (Partition g) where

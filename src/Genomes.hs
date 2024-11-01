@@ -40,9 +40,12 @@ module Genomes
     decIdx,
     occurrence,
     GeneMap,
+    emptyGeneMap,
     positionMap,
     geneMapLookup,
     geneMapAdjust,
+    geneMapUniom,
+    geneMapDifference,
     occurrenceMax,
     singletonOnBoth,
     ChromList,
@@ -274,6 +277,10 @@ occurrence geneMap a = maybe 0 length (geneMapLookup a geneMap)
 
 newtype GeneMap a = GM (IntMap a) deriving newtype (Functor, Foldable)
 
+emptyGeneMap :: GeneMap a
+emptyGeneMap = GM IntMap.empty
+
+-- Get map from genes to the positions they appear in the genomes
 positionMap :: (Genome g) => g -> GeneMap [Idx]
 positionMap g = GM . IntMap.fromListWith (++) . map (\i -> (geneToInt . abs $ getGene i g, [i])) $ [1 .. mkIdx (size g)]
 
@@ -282,6 +289,12 @@ geneMapLookup a (GM gm) = IntMap.lookup (geneToInt $ abs a) gm
 
 geneMapAdjust :: (a -> a) -> Gene -> GeneMap a -> GeneMap a
 geneMapAdjust f a (GM gm) = GM $ IntMap.adjust f (geneToInt $ abs a) gm
+
+geneMapUniom :: GeneMap a -> GeneMap a -> GeneMap a
+geneMapUniom (GM gm1) (GM gm2) = GM $ IntMap.union gm1 gm2
+
+geneMapDifference :: GeneMap a -> GeneMap a -> GeneMap a
+geneMapDifference (GM gm1) (GM gm2) = GM $ IntMap.difference gm1 gm2
 
 occurrenceMax :: (Genome g) => g -> Int
 occurrenceMax = maximum . fmap length . positionMap

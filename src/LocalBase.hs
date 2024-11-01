@@ -15,6 +15,7 @@ import Data.Hashable (Hashable)
 import Data.List (sortBy)
 import Data.List qualified as List
 import Debug.Trace (trace)
+import qualified Data.Map as Map
 
 newtype Dist = Dist Int deriving newtype (Eq, Show, Read)
 
@@ -109,3 +110,7 @@ sortWith f = sortBy (\x y -> compare (f x) (f y))
 xOr :: Bool -> Bool -> Bool
 -- ^ XOR boolean operator
 xOr p q = (p || q) && not (p && q)
+
+flipMap :: (Ord b) => Map.Map a b -> Map.Map b a
+-- ^ flip keys and values of a map
+flipMap = Map.fromList . map (\(x, y) -> (y, x)) . Map.toList
