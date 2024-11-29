@@ -25,8 +25,7 @@ module Partition
     mkCommonPartition,
     mkCommonPartition2,
     combine,
-    blockDelsToBps,
-    bpsToBlockDels,
+    bpsToBlockDelims,
   )
 where
 
@@ -38,7 +37,6 @@ where
 -- Maintainer  : gabriel.gabrielhs@gmail.com
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS
-import Data.EnumSet qualified as EnumSet
 import Data.Foldable (foldrM, toList)
 import Data.Map qualified as Map
 import Data.Maybe (isNothing)
@@ -59,26 +57,40 @@ data Partition g where
 instance (Eq g) => Eq (Partition g) where
   (GP g1 bs1 bps1 n1) == (GP g2 bs2 bps2 n2) = g1 == g2 && bs1 == bs2 && bps1 == bps2 && n1 == n2
 
-mkPartitionFromBreakpoints :: (Genome g) => ChromList g -> Breakpoints -> Partition g
-mkPartitionFromBreakpoints g bps = GP g bs bps (Set.size bps + numChromosomes g)
-  where
-    -- Get the blocks between each breakpoint, note the adjustments to take into account breakpoints in distinct chromosomes
-    bs =
+data BlockDelim = BlockDelim
+  { b_chr :: Idx,
+    b_beg :: Idx,
+    b_end :: Idx
+  }
+  deriving (Show)
+
+instance Eq BlockDelim where
+  b1 == b2 = (b_beg b1 == b_beg b2) && (b_end b1 == b_end b2)
+
+-- Get the blocks delimiters between each breakpoint, note the adjustments to take into account breakpoints in distinct chromosomes
+bpsToBlockDelims :: (Genome g) => g -> Breakpoints -> [BlockDelim]
+bpsToBlockDelims g bps =
       foldr
         ( \((chri, i), (chrsucci, succi)) acc ->
             ( if chri == chrsucci
-                then subGenome (incIdx i) succi (getChromosome chri g) : acc
+                then BlockDelim (incIdx i) succi chri : acc
                 else
-                  let bsi = subGenome (incIdx i) (mkIdx . Genomes.size $ getChromosome chri g) (getChromosome chri g)
-                      copied_chrs = map (`getChromosome` g) [incIdx chri .. decIdx chrsucci]
-                      bsucci = subGenome 1 succi (getChromosome chrsucci g)
+                  let bsi = BlockDelim (incIdx i) (mkIdx . Genomes.size $ getChromosome chri g) chri
+                      copied_chrs = map (\chr -> BlockDelim 1 (mkIdx . Genomes.size . getChromosome chr $ g) chr) [incIdx chri .. decIdx chrsucci]
+                      bsucci = BlockDelim 1 succi chrsucci
                   in  bsi : copied_chrs ++ bsucci : acc
             )
         )
         []
         . zip bg
         $ tail bg
+  where
     bg = (1, 0) : Set.toAscList bps ++ [(mkIdx (Genomes.numChromosomes g), mkIdx (Genomes.size g))]
+
+mkPartitionFromBreakpoints :: (Genome g) => ChromList g -> Breakpoints -> Partition g
+mkPartitionFromBreakpoints g bps = GP g bs bps (Set.size bps + numChromosomes g)
+  where
+    bs = map (\b -> subGenome (b_beg b) (b_end b) (getChromosome (b_chr b) g)) (bpsToBlockDelims g bps)
 
 -- | Make a partition from a list of blocks.
 -- The blocks of @bs@ must concatenate into the genome @g@ and @g@ cannot have size 0.
@@ -226,6 +238,13 @@ findUncommon matcher pg ph =
 mkCommonPartition2 :: (Matcher m g1 g2, Genome g1, Genome g2) => m g1 g2 -> ChromList g1 -> Breakpoints -> ChromList g2 -> Breakpoints -> CommonPartition g1 g2
 mkCommonPartition2 matcher g bg h bh = mkCommonPartition matcher (mkPartitionFromBreakpoints g bg) (mkPartitionFromBreakpoints h bh)
 
+mkCommonPartition3 :: (Matcher m g1 g2, Genome g1, Genome g2) => m g1 g2 -> ChromList g1 -> [BlockDelim] -> ChromList g2 -> [BlockDelim] -> CommonPartition g1 g2
+mkCommonPartition3 matcher g bsl_g h bsl_h = mkCommonPartition matcher (mkPartitionFromBlocks g bs_g) (mkPartitionFromBlocks h bs_h)
+  where
+    bs_g = map (\b -> subGenome (b_beg b) (b_end b) (getChromosome (b_chr b) g)) bsl_g
+    bs_h = map (\b -> subGenome (b_beg b) (b_end b) (getChromosome (b_chr b) h)) bsl_h
+
+
 instance (Show g) => Show (Partition g) where
   show pg = combiStr subs_g
     where
@@ -264,35 +283,11 @@ getBlocksCorrespondence_ matcher pg ph =
     let sub_hs = blocks ph
     return . map fst . filter (isMatch matcher sub_g . snd) . zip [0 ..] $ sub_hs
 
-data BlockDel = BlockDel
-  { b_beg :: Idx,
-    b_end :: Idx,
-    b_sing :: Bool
-  }
-  deriving (Show)
-
-instance Eq BlockDel where
-  b1 == b2 = (b_beg b1 == b_beg b2) && (b_end b1 == b_end b2)
-
 data CombineWhat = CombineSinSin | CombineSinRep | CombineRepRep
 
-bpsToBlockDels :: (Genome g) => g -> Breakpoints -> Seq BlockDel
-bpsToBlockDels g bps = Seq.fromList . zipWith (\a b -> BlockDel (incIdx a) b (any testSingleton [incIdx a .. b])) l_bps $ tail l_bps
-  where
-    l_bps = 0 : EnumSet.toAscList bps ++ [mkIdx (Genomes.size g)]
-    posMap = positionMap g
-    testSingleton i =
-      case geneMapLookup (getGene i g) posMap of
-        Nothing -> False
-        Just pos -> length pos == 1
-
-blockDelsToBps :: Seq BlockDel -> Breakpoints
-blockDelsToBps seq_bs = EnumSet.fromList . init $ map (\(BlockDel _ b _) -> b) bs
-  where
-    bs = toList seq_bs
-
+-- TODO: verificar erros de copilação e ver se está tudo certo
 combine :: (Matcher m g1 g2, Genome g1, Genome g2) => m g1 g2 -> CommonPartition g1 g2 -> CommonPartition g1 g2
-combine matcher cp = mkCommonPartition2 matcher g bg' h bh'
+combine matcher cp = mkCommonPartition3 matcher g (toList blo_g') h (toList blo_h')
   where
     (pg, ph) = case cp of
       CGPbal pg_ ph_ -> (pg_, ph_)
@@ -301,13 +296,17 @@ combine matcher cp = mkCommonPartition2 matcher g bg' h bh'
     h = underlineGenome ph
     bg = breakpoints pg
     bh = breakpoints ph
-    (blo_g', blo_h') = combine_ CombineSinSin (blo_g, blo_h)
-    blo_g = bpsToBlockDels g bg
-    blo_h = bpsToBlockDels h bh
-    bg' = blockDelsToBps blo_g'
-    bh' = blockDelsToBps blo_h'
+    (blo_g', blo_h') = combine_ CombineSinSin (Seq.fromList blo_g, Seq.fromList blo_h)
+    blo_g = testSingletons <$> bpsToBlockDelims g bg
+    blo_h = testSingletons <$> bpsToBlockDelims h bh
 
-    combine_ :: CombineWhat -> (Seq BlockDel, Seq BlockDel) -> (Seq BlockDel, Seq BlockDel)
+    testSingletons bs = (bs, any testSingleton [b_beg bs .. b_end bs])
+    testSingleton i =
+      case geneMapLookup (getGene i g) (positionMap g) of
+        Nothing -> False
+        Just pos -> length pos == 1
+
+    combine_ :: CombineWhat -> (Seq (BlockDelim,Bool), Seq (BlockDelim,Bool)) -> (Seq BlockDelim, Seq BlockDelim)
     combine_ what (bs1, bs2) =
       let (bs1', bs2') = go1 (Empty, bs1, Empty, bs2)
        in if bs1' /= bs1
@@ -315,7 +314,7 @@ combine matcher cp = mkCommonPartition2 matcher g bg' h bh'
             else case what of
               CombineSinSin -> combine_ CombineSinRep (bs1, bs2)
               CombineSinRep -> combine_ CombineRepRep (bs1, bs2)
-              CombineRepRep -> (bs1, bs2)
+              CombineRepRep -> (fmap fst bs1, fmap fst bs2)
       where
         -- We have to iterate through the elements of the two sequences,
         -- during the iteration they are moved from the sequence on the right
@@ -336,12 +335,12 @@ combine matcher cp = mkCommonPartition2 matcher g bg' h bh'
           | otherwise = go1 (pre1, blocks1, pre2 :|> ba2, bb2 :<| suf2)
           where
             testReps = case what of
-              CombineSinSin -> b_sing ba1 && b_sing bb1
-              CombineSinRep -> b_sing ba1 || b_sing bb1
+              CombineSinSin -> snd ba1 && snd bb1
+              CombineSinRep -> snd ba1 || snd bb1
               CombineRepRep -> True
 
-            b1' = BlockDel (b_beg ba1) (b_end bb1) (b_sing ba1 || b_sing bb1)
-            b2' = BlockDel (b_beg ba2) (b_end bb2) (b_sing ba2 || b_sing bb2)
-            g_b1' = subGenome (b_beg b1') (b_end b1') g
-            h_b2' = subGenome (b_beg b2') (b_end b2') h
+            b1' = (BlockDelim (b_beg (fst ba1)) (b_end (fst bb1)), snd ba1 || snd bb1)
+            b2' = (BlockDelim (b_beg (fst ba2)) (b_end (fst bb2)), snd ba2 || snd bb2)
+            g_b1' = subGenome (b_beg (fst b1')) (b_end (fst b1')) g
+            h_b2' = subGenome (b_beg (fst b2')) (b_end (fst b2')) h
         go1 (_, _, _, _) = error patternError

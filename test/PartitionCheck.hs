@@ -90,14 +90,6 @@ suboptimalRuleKeepBalancedGenomes rule =
     (g', h') <- forAll . return $ rule RFRM g h
     assert $ areBalanced RFRM g' h'
 
-prop_bpsToBlockDelsIsomorphism :: Property
-prop_bpsToBlockDelsIsomorphism = property $ do
-  (GW g) <- forAll (genGenome 100)
-  k <- forAll $ Gen.int (Range.linear 0 (size g - 2))
-  bps_ <- forAll . fmap (take k) . Gen.shuffle $ [1 .. mkIdx (size g - 1)]
-  let bps = EnumSet.fromList bps_
-  bps === (blockDelsToBps . bpsToBlockDels g $ bps)
-
 prop_equalGenomesHaveOnlyPerfectComponetsOnBMG :: Property
 prop_equalGenomesHaveOnlyPerfectComponetsOnBMG =
   property $ do
@@ -142,6 +134,7 @@ partitionProduceValidCorrespondence partAlg size_lim =
 --     (CGPunbal pg ph) <- forAll . return $ Partition.combine RFRM part
 --     assert $ checkCommonUnbal RFRM pg ph
 
+-- TODO: test mkPartitionFromBreakpoints and mkPartitionFromBlocks
 -- TODO: test mkPartitionFromBreakpoints and mkPartitionFromBlocks
 
 tests :: IO Bool
